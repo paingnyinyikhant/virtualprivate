@@ -16,7 +16,7 @@ TARGET_COUNTRIES = {
     "TH": {"flag": "🇹🇭", "keywords": ["th", "thailand"]},
 }
 
-SOURCE_URL = "https://raw.githubusercontent.com/barry-far/V2ray-config/main/All_Configs_base64_Sub.txt"
+SOURCE_URL = "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/v2ray-base64.txt"
 
 MAX_PER_COUNTRY = 20
 
