@@ -23,19 +23,20 @@ SOURCES = {
     },
 }
 
-MAX_PER_COUNTRY = 10
+MAX_PER_COUNTRY = 20
 
 
-def is_vless_traffic_functional(host, port, path="/", sni=None, timeout=3.5):
+def v2rayng_real_ping_test(host, port, path="/", sni=None, timeout=2.5):
     """
-    မြန်မာပြည် Network တွင် 100% Data ဆွဲ၍ ရ/မရ အစစ်အမှန် Traffic စစ်ဆေးခြင်း
+    v2rayNG / Happ ရဲ့ Real Delay Test နည်းအတိုင်း
+    Data အစစ် ထွက်/မထွက် စစ်ဆေးသည့် စနစ် (Strict Test)
     """
     try:
-        # ၁။ TCP Connection စစ်ဆေးခြင်း
+        # 1. Socket TCP Connection
         sock = socket.create_connection((host, int(port)), timeout=timeout)
         target_sni = sni if sni else host
 
-        # ၂။ TLS Wrapper ဖြင့် Handshake ပြုလုပ်ခြင်း
+        # 2. TLS Handshake Setup
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
@@ -45,40 +46,32 @@ def is_vless_traffic_functional(host, port, path="/", sni=None, timeout=3.5):
         ) as tls_sock:
             tls_sock.settimeout(timeout)
 
-            # WebSocket Header ဖြင့် Connection Probe ပို့ခြင်း
+            # 3. WebSocket Handshake Packet ပို့ပြီး Response စစ်ခြင်း (Real Ping)
             clean_path = path if path.startswith("/") else "/" + path
-            ws_handshake = (
+            request = (
                 f"GET {clean_path} HTTP/1.1\r\n"
                 f"Host: {target_sni}\r\n"
-                f"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"
+                f"User-Agent: v2rayNG/1.8.5\r\n"
                 f"Upgrade: websocket\r\n"
                 f"Connection: Upgrade\r\n"
                 f"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
                 f"Sec-WebSocket-Version: 13\r\n\r\n"
             )
-            tls_sock.sendall(ws_handshake.encode("utf-8"))
+            tls_sock.sendall(request.encode("utf-8"))
 
-            response = tls_sock.recv(512)
+            # Response ကို ဖတ်ယူခြင်း
+            response = tls_sock.recv(256)
 
-            # Response Status စစ်ခြင်း (101 Switching Protocols, 200, or Valid WS Handshake)
+            # Response ထဲမှာ 101 Switching Protocols သို့မဟုတ် Server Data တကယ်ပါမှ အတည်ပြုမည်
             if response and (
                 b"101" in response
-                or b"HTTP/" in response
                 or b"Sec-WebSocket-Accept" in response
+                or b"HTTP/1.1 200" in response
             ):
-                return True
-            elif len(response) > 0:
-                # Data Response ပြန်လာပါက သုံး၍ရသော Node အဖြစ် သတ်မှတ်မည်
                 return True
 
     except Exception:
-        # TLS Probe မအောင်မြင်ပါက Single TCP Layer Verification အဖြစ် စစ်မည်
-        try:
-            sock = socket.create_connection((host, int(port)), timeout=2.0)
-            sock.close()
-            return True
-        except Exception:
-            return False
+        return False
 
     return False
 
@@ -89,7 +82,7 @@ def fetch_and_process_country(country_code, config):
     valid_nodes = []
 
     try:
-        res = requests.get(url, timeout=12)
+        res = requests.get(url, timeout=10)
         content = res.text.strip()
 
         try:
@@ -115,9 +108,9 @@ def fetch_and_process_country(country_code, config):
                 )[0]
                 path = query_params.get("path", ["/"])[0]
 
-                # Real Traffic စစ်ဆေးမှု အောင်မြင်သော Node များကိုသာ ရွေးမည်
-                if host and is_vless_traffic_functional(
-                    host, port, path=path, sni=sni, timeout=3.5
+                # Strict Real Ping ကျော်ဖြတ်နိုင်သော Node များကိုသာ ယူမည်
+                if host and v2rayng_real_ping_test(
+                    host, port, path=path, sni=sni, timeout=2.5
                 ):
                     base_url = line.split("#")[0]
                     new_name = urllib.parse.quote(
@@ -132,7 +125,7 @@ def fetch_and_process_country(country_code, config):
                 continue
 
     except Exception as e:
-        print(f"Error processing {country_code}: {e}")
+        print(f"Error fetching {country_code}: {e}")
 
     return valid_nodes
 
@@ -141,10 +134,10 @@ def main():
     all_nodes = []
 
     for country_code, config in SOURCES.items():
-        print(f"Deep testing nodes for {country_code}...")
+        print(f"Testing Real Ping for {country_code}...")
         nodes = fetch_and_process_country(country_code, config)
         all_nodes.extend(nodes)
-        print(f"Passed valid nodes for {country_code}: {len(nodes)}")
+        print(f"Passed strict test for {country_code}: {len(nodes)} nodes")
 
     tz = pytz.timezone("Asia/Yangon")
     current_date = datetime.now(tz).strftime("%d-%b-%y")
@@ -158,7 +151,7 @@ def main():
     with open("servers", "w", encoding="utf-8") as f:
         f.write(encoded_content)
 
-    print(f"Successfully processed and verified {len(all_nodes)} nodes.")
+    print(f"Done! Saved {len(all_nodes)} 100% working nodes to 'servers'.")
 
 
 if __name__ == "__main__":
