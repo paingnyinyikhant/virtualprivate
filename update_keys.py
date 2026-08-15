@@ -29,8 +29,8 @@ from datetime import datetime
 import pytz, requests
 
 SOURCE = "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/sg/all.txt"
-MAX = 30
-PROTOS = ("vless://", "vmess://", "trojan://", "ss://")
+MAX = 20
+PROTOS = ("vless://", "ss://")  # VLESS နဲ့ SS ပဲ ယူမယ်
 FB = "block_domains=an.facebook.com,graph.facebook.com/adnw,pixel.facebook.com,connect.facebook.net/adnw"
 
 # Known working SNI domains (from user's configs)
@@ -253,14 +253,20 @@ def tls_test(host, port, sni=None, timeout=4.0):
 
 
 def test_config(d):
-    """Test a config - TCP + TLS if needed"""
+    """Test a config - 2x TCP + TLS with strict validation"""
     h, pt = d["host"], d["port"]
     sni = d.get("sni")
     
-    # TCP test
-    ok, tcp_lat = tcp_test(h, pt)
-    if not ok:
+    # Test 1: TCP
+    ok1, tcp_lat1 = tcp_test(h, pt)
+    if not ok1:
         return None
+    
+    # Test 2: TCP again (stability check)
+    time.sleep(0.1)
+    ok2, tcp_lat2 = tcp_test(h, pt)
+    if not ok2:
+        return None  # Unstable - reject
     
     # TLS test for TLS-based protocols
     need_tls = d["security"] in ("tls", "reality") or d["protocol"] == "trojan"
@@ -273,33 +279,40 @@ def test_config(d):
             return None
         tls_lat = tlat
         tls_proto = tproto
+        
+        # Second TLS test for stability
+        time.sleep(0.1)
+        tok2, tlat2, _ = tls_test(h, pt, sni)
+        if not tok2:
+            return None  # TLS unstable - reject
+        tls_lat = round((tlat + tlat2) / 2, 1)
     
-    # Second test for stability check
-    time.sleep(0.1)
-    ok2, tcp_lat2 = tcp_test(h, pt)
-    if not ok2:
-        d["score"] -= 5  # Unstable
+    avg_tcp = round((tcp_lat1 + tcp_lat2) / 2, 1)
+    avg = tls_lat if tls_lat > 0 else avg_tcp
     
-    avg = tls_lat if tls_lat > 0 else tcp_lat
+    # Reject very high latency (probably won't work well)
+    if avg > 2000:
+        return None
     
-    # Latency bonus
-    if 0 < avg < 50: d["score"] += 8
-    elif 0 < avg < 100: d["score"] += 6
-    elif 0 < avg < 200: d["score"] += 4
-    elif 0 < avg < 400: d["score"] += 2
-    elif avg > 1000: d["score"] -= 5
+    # Latency scoring (stricter)
+    if 0 < avg < 50: d["score"] += 10
+    elif 0 < avg < 100: d["score"] += 8
+    elif 0 < avg < 200: d["score"] += 5
+    elif 0 < avg < 400: d["score"] += 3
+    elif 0 < avg < 600: d["score"] += 1
+    elif avg > 1000: d["score"] -= 8
     
-    # Port bonus (443 is best for GFW)
+    # Port bonus
     if pt == 443: d["score"] += 5
     
-    # Stability bonus
-    if ok2: d["score"] += 3
+    # Stability bonus (both tests passed)
+    d["score"] += 5
     
     if tls_proto and isinstance(tls_proto, str) and "TLSv1.3" in tls_proto:
         d["features"].append("TLSv1.3")
     
     return {
-        "d": d, "tcp": tcp_lat, "tls": tls_lat,
+        "d": d, "tcp": avg_tcp, "tls": tls_lat,
         "score": d["score"],
         "verdict": "🟢" if d["score"] >= 25 else "🟡" if d["score"] >= 15 else "🟠" if d["score"] >= 8 else "🔴"
     }
