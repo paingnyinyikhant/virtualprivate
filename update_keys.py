@@ -32,9 +32,11 @@ ALLOWED_PORTS = {2096, 8388, 8443, 2053, 2083, 2087}
 BLOCKED_SNIS = ["cloudflare.com", "speedtest.net", "co.uk", "127.0.0.1"]
 SUPPORTED_PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")
 
-# 🛡️ Website & Facebook Ads များ ပိတ်ပေးမည့် Direct Node DNS
-ADBLOCK_PRIMARY_DNS = "94.140.14.14"
-ADBLOCK_DOH_URL = "https://dns.adguard-dns.com/dns-query"
+# 🚫 Facebook Ads သီးသန့် Domain & Rule Blocking Parameters
+FB_ADS_BLOCK_PARAMS = (
+    "block_domains=an.facebook.com,graph.facebook.com/adnw,"
+    "pixel.facebook.com,connect.facebook.net/adnw"
+)
 
 
 def strict_myanmar_real_ping(host, port, path="/", sni=None):
@@ -181,25 +183,21 @@ def fetch_and_process_country(country_code, config):
         for item in combined:
             raw = item["raw"]
             
-            # မကိန်း Node များတွင် (Ads Blocker) Tag ထည့်မည်
-            is_adblock = (count % 2 != 0)
-            clean_name = f"{flag} {country_code} {count} (Ads Blocker)" if is_adblock else f"{flag} {country_code} {count}"
+            # Node Name များကို ပုံမှန်အတိုင်း သန့်သန့်ရှင်းရှင်း ထားရှိခြင်း
+            clean_name = f"{flag} {country_code} {count}"
 
             if item["type"] == "vmess":
                 data = item["data"]
                 data["ps"] = clean_name
-                # VMess Config ထဲသို့ AdBlock DNS များနှင့် Remote Query ဘောင်များ ထည့်သွင်းပေးခြင်း
-                if is_adblock:
-                    data["dns"] = ADBLOCK_PRIMARY_DNS
-                    data["doh"] = ADBLOCK_DOH_URL
+                # VMess Config အတွင်း Facebook Ads Blocking Parameters သီးသန့်ထည့်ခြင်း
+                data["fb_block"] = FB_ADS_BLOCK_PARAMS
                 new_b64 = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
                 formatted.append(f"vmess://{new_b64}")
             else:
                 base_url = raw.split("#")[0]
-                # VLESS/Trojan/SS Node URL ထဲသို့ AdBlock Query Parameters များ တိုက်ရိုက် Embedded လုပ်ခြင်း
-                if is_adblock:
-                    delimiter = "&" if "?" in base_url else "?"
-                    base_url = f"{base_url}{delimiter}dns={ADBLOCK_PRIMARY_DNS}&doh={urllib.parse.quote(ADBLOCK_DOH_URL)}"
+                # VLESS / Trojan / SS Dynamic Parameter ထဲသို့ Facebook Ad Block Injection ပြုလုပ်ခြင်း
+                delimiter = "&" if "?" in base_url else "?"
+                base_url = f"{base_url}{delimiter}{FB_ADS_BLOCK_PARAMS}"
 
                 new_name = urllib.parse.quote(clean_name)
                 formatted.append(f"{base_url}#{new_name}")
@@ -232,7 +230,7 @@ def main():
     with open("servers", "w", encoding="utf-8") as f:
         f.write(encoded_content)
 
-    print(f"Done! Updated 'servers' with Embedded AdBlock Node Parameters.")
+    print(f"Done! Updated nodes with clean names and targeted Facebook Ad Block rules.")
 
 
 if __name__ == "__main__":
