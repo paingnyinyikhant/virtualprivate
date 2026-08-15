@@ -1,11 +1,13 @@
 import base64
 from datetime import datetime
+import re
 import socket
+import ssl
 import urllib.parse
 import pytz
 import requests
 
-# Source URLs များ
+# Source URLs
 SOURCES = {
     "SG": {
         "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/sg/vless.txt",
@@ -21,13 +23,30 @@ SOURCES = {
     },
 }
 
-MAX_PER_COUNTRY = 20  # တစ်နိုင်ငံလျှင် အများဆုံး ၂၀ ခုပဲ ယူမည်
+MAX_PER_COUNTRY = 20
 
 
-def check_ping(host, port, timeout=1.5):
-    """TCP Ping စစ်ဆေးခြင်း"""
+def check_myanmar_network_ping(host, port, sni=None, timeout=2.5):
+    """
+    မြန်မာနိုင်ငံ Network နှင့် ကိုက်ညီသော TLS Handshake & TCP Combined Ping Check
+    """
     try:
+        # ၁။ ရှေ့ဦးစွာ TCP Connection စစ်ခြင်း
         sock = socket.create_connection((host, int(port)), timeout=timeout)
+
+        # 端口 443 သို့မဟုတ် SNI ပါပါက TLS Handshake စစ်ပါမည် (မြန်မာပြည်တွင် SNI Block ခ่อยောမှ ဆွဲရန်)
+        if int(port) == 443 or sni:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+
+            server_hostname = sni if sni else host
+            with context.wrap_socket(
+                sock, server_hostname=server_hostname
+            ) as tls_sock:
+                tls_sock.settimeout(timeout)
+                return True
+
         sock.close()
         return True
     except Exception:
@@ -43,7 +62,6 @@ def fetch_and_process_country(country_code, config):
         res = requests.get(url, timeout=10)
         content = res.text.strip()
 
-        # Base64 Decode လုပ်ရန် လို/မလို စစ်ဆေးခြင်း
         try:
             decoded = base64.b64decode(content).decode("utf-8")
             lines = decoded.splitlines()
@@ -61,17 +79,23 @@ def fetch_and_process_country(country_code, config):
                 host = parsed.hostname
                 port = parsed.port or 443
 
-                # Ping မိတာတွေကိုပဲ သီးသန့်ရွေးမည်
-                if host and check_ping(host, port):
+                # Query string ထဲမှ SNI / Host parameter ကို ရှာခြင်း
+                query_params = urllib.parse.parse_qs(parsed.query)
+                sni = query_params.get("sni", [None])[0] or query_params.get(
+                    "host", [None]
+                )[0]
+
+                # မြန်မာပြည် Network အတွက် သီးသန့် အဆင့်မြှင့်ထားသော Ping Test စစ်ခြင်း
+                if host and check_myanmar_network_ping(
+                    host, port, sni=sni, timeout=2.5
+                ):
                     base_url = line.split("#")[0]
-                    # ဥပမာ - 🇸🇬 SG 1, 🇸🇬 SG 2 စသဖြင့် နာမည်ပေးခြင်း
                     new_name = urllib.parse.quote(
                         f"{flag} {country_code} {count}"
                     )
                     valid_nodes.append(f"{base_url}#{new_name}")
                     count += 1
 
-                    # အကောင့် ၂၀ ပြည့်ပါက ရပ်မည်
                     if len(valid_nodes) >= MAX_PER_COUNTRY:
                         break
             except Exception:
@@ -86,32 +110,25 @@ def fetch_and_process_country(country_code, config):
 def main():
     all_nodes = []
 
-    # နိုင်ငံတစ်ခုချင်းစီအတွက် စစ်ဆေးပြီး Node များ စုစည်းခြင်း
     for country_code, config in SOURCES.items():
-        print(f"Processing {country_code}...")
+        print(f"Checking {country_code} for Myanmar Network Compatibility...")
         nodes = fetch_and_process_country(country_code, config)
         all_nodes.extend(nodes)
-        print(f"Found {len(nodes)} working nodes for {country_code}")
+        print(f"Passed for {country_code}: {len(nodes)} nodes")
 
-    # Myanmar/Asia Timezone နည်းဖြင့် လက်ရှိ Date ယူခြင်း (ဥပမာ - 15-Aug-26)
     tz = pytz.timezone("Asia/Yangon")
     current_date = datetime.now(tz).strftime("%d-%b-%y")
 
-    # Dynamic Profile Title နှင့် Plain Text Data စုစည်းခြင်း
     profile_title = f"#profile-title: {current_date} Updated\n"
     plain_content = profile_title + "\n".join(all_nodes)
 
-    # 💡 စာသားအကုန်လုံးကို Base64 အပြည့်အဝ Encode လုပ်ခြင်း
     encoded_bytes = base64.b64encode(plain_content.encode("utf-8"))
     encoded_content = encoded_bytes.decode("utf-8")
 
-    # Base64 encode ထားပြီးသား text များကို 'servers' ဖိုင်အဖြစ် သိမ်းမည်
     with open("servers", "w", encoding="utf-8") as f:
         f.write(encoded_content)
 
-    print(
-        f"Successfully encoded and written {len(all_nodes)} nodes to 'servers' file."
-    )
+    print(f"Done! Saved {len(all_nodes)} nodes.")
 
 
 if __name__ == "__main__":
