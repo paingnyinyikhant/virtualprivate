@@ -25,16 +25,19 @@ SOURCES = {
 
 MAX_PER_COUNTRY = 20
 
-# 🎯 ဦးစားပေးစစ်ထုတ်မည့် Port များ (443 ကို လုံးဝပယ်ထားသည်)
+# 🎯 ဦးစားပေးစစ်ထုတ်မည့် Port များ (Port 443 ကို လုံးဝ ပယ်ထားသည်)
 PRIORITY_PORTS = {2096, 8388}
 ALLOWED_PORTS = {2096, 8388, 8443, 2053, 2083, 2087}
 
 BLOCKED_SNIS = ["cloudflare.com", "speedtest.net", "co.uk", "127.0.0.1"]
 SUPPORTED_PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")
 
+# 🛡️ Safe AdBlock DNS Servers (Video Streaming မပျက်ဘဲ Ads / Trackers များကို သာ ပိတ်ပေးသည်)
+ADBLOCK_DNS = "94.140.14.14"
+
 
 def strict_myanmar_real_ping(host, port, path="/", sni=None):
-    """ Fast Ping Test with Strict Timeout (No Port 443) """
+    """ Fast Ping Test with Strict Timeout """
     try:
         port = int(port)
         if port not in ALLOWED_PORTS:
@@ -166,28 +169,43 @@ def fetch_and_process_country(country_code, config):
                 if r:
                     valid_nodes.append(r)
 
-        # 🎯 Priority Sorting (Port 2096 & 8388 ရှေ့ဆုံးမှ အရင်ယူမည်)
+        # Priority Sorting
         priority_nodes = [n for n in valid_nodes if n["port"] in PRIORITY_PORTS]
         normal_nodes = [n for n in valid_nodes if n["port"] not in PRIORITY_PORTS]
 
         combined = (priority_nodes + normal_nodes)[:MAX_PER_COUNTRY]
 
-        # 🏷️ Clean Naming Format: 🇸🇬 SG 1, 🇸🇬 SG 2 (Port နံပါတ်များ လုံးဝမပါပါ)
         formatted = []
         count = 1
         for item in combined:
             raw = item["raw"]
-            clean_name = f"{flag} {country_code} {count}"
             
+            # 🎯 Server ၂၀ မှာ ၁၀ ခု (မကိန်း Node များ - 1, 3, 5, 7...) တွင် AdBlock ထည့်ပေးမည်
+            is_adblock = (count % 2 != 0)
+            
+            if is_adblock:
+                clean_name = f"{flag} {country_code} {count} (Ads Blocker)"
+            else:
+                clean_name = f"{flag} {country_code} {count}"
+
             if item["type"] == "vmess":
                 data = item["data"]
                 data["ps"] = clean_name
+                # AdBlock ဖြစ်ပါက VMess Extra DNS Properties တွင် Embedded လုပ်ပေးခြင်း
+                if is_adblock:
+                    data["dns"] = ADBLOCK_DNS
                 new_b64 = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
                 formatted.append(f"vmess://{new_b64}")
             else:
                 base_url = raw.split("#")[0]
+                # VLESS/Trojan/SS Dynamic Parameter injection for AdBlock
+                if is_adblock:
+                    delimiter = "&" if "?" in base_url else "?"
+                    base_url = f"{base_url}{delimiter}dns={ADBLOCK_DNS}"
+
                 new_name = urllib.parse.quote(clean_name)
                 formatted.append(f"{base_url}#{new_name}")
+                
             count += 1
 
         return formatted
@@ -216,7 +234,7 @@ def main():
     with open("servers", "w", encoding="utf-8") as f:
         f.write(encoded_content)
 
-    print(f"Done! Updated 'servers' with {len(all_nodes)} nodes.")
+    print(f"Done! Created 'servers' with selective AdBlock enabled.")
 
 
 if __name__ == "__main__":
