@@ -25,16 +25,16 @@ SOURCES = {
 
 MAX_PER_COUNTRY = 20
 
-# 🎯 ဦးစားပေးစစ်ထုတ်မည့် Port များ (Port 443 ကို လုံးဝ ပယ်ထားသည်)
+# 🎯 ဦးစားပေးစစ်ထုတ်မည့် Port များ (Port 443 ကို ပယ်ထားသည်)
 PRIORITY_PORTS = {2096, 8388}
 ALLOWED_PORTS = {2096, 8388, 8443, 2053, 2083, 2087}
 
 BLOCKED_SNIS = ["cloudflare.com", "speedtest.net", "co.uk", "127.0.0.1"]
 SUPPORTED_PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")
 
-# 🛡️ APK / Game Ads ပါ ပိတ်ပေးမည့် Safe AdBlock DNS List
-ADBLOCK_DNS_PRIMARY = "94.140.14.14"      # AdGuard Default AdBlock
-ADBLOCK_DNS_SECONDARY = "1.1.1.2"        # Cloudflare Malware & Ads Block
+# 🛡️ Website & Facebook Ads များ ပိတ်ပေးမည့် Direct Node DNS
+ADBLOCK_PRIMARY_DNS = "94.140.14.14"
+ADBLOCK_DOH_URL = "https://dns.adguard-dns.com/dns-query"
 
 
 def strict_myanmar_real_ping(host, port, path="/", sni=None):
@@ -181,28 +181,25 @@ def fetch_and_process_country(country_code, config):
         for item in combined:
             raw = item["raw"]
             
-            # 🎯 Server ၂၀ မှာ ၁၀ ခု (မကိန်း Node များ - 1, 3, 5, 7...) တွင် AdBlock ထည့်ပေးမည်
+            # မကိန်း Node များတွင် (Ads Blocker) Tag ထည့်မည်
             is_adblock = (count % 2 != 0)
-            
-            if is_adblock:
-                clean_name = f"{flag} {country_code} {count} (Ads Blocker)"
-            else:
-                clean_name = f"{flag} {country_code} {count}"
+            clean_name = f"{flag} {country_code} {count} (Ads Blocker)" if is_adblock else f"{flag} {country_code} {count}"
 
             if item["type"] == "vmess":
                 data = item["data"]
                 data["ps"] = clean_name
-                # VMess Config ထဲသို့ APK / Mobile Game Ads များ ပိတ်မည့် DNS Rules တိုက်ရိုက်ထည့်ခြင်း
+                # VMess Config ထဲသို့ AdBlock DNS များနှင့် Remote Query ဘောင်များ ထည့်သွင်းပေးခြင်း
                 if is_adblock:
-                    data["dns"] = f"{ADBLOCK_DNS_PRIMARY},{ADBLOCK_DNS_SECONDARY}"
+                    data["dns"] = ADBLOCK_PRIMARY_DNS
+                    data["doh"] = ADBLOCK_DOH_URL
                 new_b64 = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
                 formatted.append(f"vmess://{new_b64}")
             else:
                 base_url = raw.split("#")[0]
-                # VLESS/Trojan Dynamic Parameters ထဲသို့ APK Ads Block DNS များ ပေါင်းထည့်ခြင်း
+                # VLESS/Trojan/SS Node URL ထဲသို့ AdBlock Query Parameters များ တိုက်ရိုက် Embedded လုပ်ခြင်း
                 if is_adblock:
                     delimiter = "&" if "?" in base_url else "?"
-                    base_url = f"{base_url}{delimiter}dns={ADBLOCK_DNS_PRIMARY}&dns2={ADBLOCK_DNS_SECONDARY}"
+                    base_url = f"{base_url}{delimiter}dns={ADBLOCK_PRIMARY_DNS}&doh={urllib.parse.quote(ADBLOCK_DOH_URL)}"
 
                 new_name = urllib.parse.quote(clean_name)
                 formatted.append(f"{base_url}#{new_name}")
@@ -235,7 +232,7 @@ def main():
     with open("servers", "w", encoding="utf-8") as f:
         f.write(encoded_content)
 
-    print(f"Done! Created 'servers' with APK AdBlock rules.")
+    print(f"Done! Updated 'servers' with Embedded AdBlock Node Parameters.")
 
 
 if __name__ == "__main__":
