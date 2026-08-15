@@ -16,6 +16,7 @@ import random
 # ==============================================================================
 
 SOURCES = {
+    # ─── Original Sources ───
     "SG": {
         "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/sg/all.txt",
         "flag": "🇸🇬",
@@ -27,6 +28,71 @@ SOURCES = {
     "TH": {
         "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/th/all.txt",
         "flag": "🇹🇭",
+    },
+    # ─── Additional Free Sources (Global/Mixed) ───
+    "EPD": {
+        "url": "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt",
+        "flag": "🌍",
+    },
+    "EBR": {
+        "url": "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/refs/heads/main/V2Ray-Config-By-EbraSha.txt",
+        "flag": "🌍",
+    },
+    "ROO": {
+        "url": "https://raw.githubusercontent.com/roosterkid/openproxylist/main/V2RAY_BASE64.txt",
+        "flag": "🌍",
+    },
+    "BRY": {
+        "url": "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/vless.txt",
+        "flag": "🌍",
+    },
+    "BRY2": {
+        "url": "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/vmess.txt",
+        "flag": "🌍",
+    },
+    "BRY3": {
+        "url": "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/trojan.txt",
+        "flag": "🌍",
+    },
+    "BRY4": {
+        "url": "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/ss.txt",
+        "flag": "🌍",
+    },
+    "MTG": {
+        "url": "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/vless.txt",
+        "flag": "🌍",
+    },
+    "MTG2": {
+        "url": "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/vmess.txt",
+        "flag": "🌍",
+    },
+    "MTG3": {
+        "url": "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/trojan.txt",
+        "flag": "🌍",
+    },
+    "MTG4": {
+        "url": "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/ss.txt",
+        "flag": "🌍",
+    },
+    "FQF": {
+        "url": "https://raw.githubusercontent.com/free-nodes/v2rayfree/main/sub",
+        "flag": "🌍",
+    },
+    "ZNG": {
+        "url": "https://raw.githubusercontent.com/zengfr/free-vpn-subscribe/main/vpn_sub_raw_.txt",
+        "flag": "🌍",
+    },
+    "SMK": {
+        "url": "https://raw.githubusercontent.com/snakem982/proxypool/main/source/v2ray-2.txt",
+        "flag": "🌍",
+    },
+    "FR2": {
+        "url": "https://raw.githubusercontent.com/Mosifree/-FREE2CONFIG/refs/heads/main/Vless",
+        "flag": "🌍",
+    },
+    "FR3": {
+        "url": "https://raw.githubusercontent.com/Mosifree/-FREE2CONFIG/refs/heads/main/Reality",
+        "flag": "🌍",
     },
 }
 
