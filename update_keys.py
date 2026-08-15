@@ -8,7 +8,7 @@ from collections import defaultdict
 import pytz,requests
 
 TARGET={"SG":"🇸🇬","JP":"🇯🇵","TH":"🇹🇭","HK":"🇭🇰"}
-MAX=10
+MAX=20
 PRIO={2096,8443,8388}
 OK_PORTS=set(range(1,65536))-{443}  # All ports except 443
 BLK_SNI=["cloudflare.com","speedtest.net","co.uk","127.0.0.1","localhost","example.com","0.0.0.0","google.com"]
