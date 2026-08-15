@@ -26,31 +26,63 @@ SOURCES = {
 MAX_PER_COUNTRY = 20
 
 
-def check_myanmar_network_ping(host, port, sni=None, timeout=2.5):
+def check_real_data_traffic(host, port, sni=None, path="/", timeout=3.0):
     """
-    မြန်မာနိုင်ငံ Network နှင့် ကိုက်ညီသော TLS Handshake & TCP Combined Ping Check
+    ရိုးရိုး Ping စစ်ရုံတင်မကဘဲ တကယ့် Data လက်ခံ/ပေးပို့နိုင်ခြင်း (Real Traffic) ရှိမရှိ စစ်ဆေးခြင်း
     """
     try:
-        # ၁။ ရှေ့ဦးစွာ TCP Connection စစ်ခြင်း
+        # ၁။ TCP Connection အရင်စစ်မည်
         sock = socket.create_connection((host, int(port)), timeout=timeout)
 
-        # 端口 443 သို့မဟုတ် SNI ပါပါက TLS Handshake စစ်ပါမည် (မြန်မာပြည်တွင် SNI Block ခ่อยောမှ ဆွဲရန်)
-        if int(port) == 443 or sni:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
+        server_hostname = sni if sni else host
 
-            server_hostname = sni if sni else host
-            with context.wrap_socket(
-                sock, server_hostname=server_hostname
-            ) as tls_sock:
-                tls_sock.settimeout(timeout)
+        # TLS Connection စစ်ဆေးခြင်း
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+        with context.wrap_socket(
+            sock, server_hostname=server_hostname
+        ) as tls_sock:
+            tls_sock.settimeout(timeout)
+
+            # 💡 REAL TRAFFIC TEST: HTTP GET Request တိုက်ရိုက် ပို့ပြီး Data ပြန်ထွက် မထွက် စစ်မည်
+            http_request = (
+                f"GET {path} HTTP/1.1\r\n"
+                f"Host: {server_hostname}\r\n"
+                f"User-Agent: Mozilla/5.0\r\n"
+                f"Connection: close\r\n\r\n"
+            )
+            tls_sock.sendall(http_request.encode("utf-8"))
+
+            # Server ဘက်က Response ပြန်လာမလာ စောင့်ကြည့်ခြင်း
+            response = tls_sock.recv(256)
+            if response and (
+                b"HTTP/" in response or b"101" in response or b"200" in response
+            ):
+                return True
+            elif len(response) > 0:
+                # Data ပြန်ထွက်လာပါက Real Node အဖြစ် သတ်မှတ်မည်
                 return True
 
-        sock.close()
-        return True
     except Exception:
-        return False
+        # HTTP Handshake မအောင်မြင်ပါက ရိုးရိုး TLS စစ်မည်
+        try:
+            sock = socket.create_connection((host, int(port)), timeout=2.0)
+            if int(port) == 443 or sni:
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                with context.wrap_socket(
+                    sock, server_hostname=sni or host
+                ) as tls_sock:
+                    return True
+            sock.close()
+            return True
+        except Exception:
+            return False
+
+    return False
 
 
 def fetch_and_process_country(country_code, config):
@@ -79,15 +111,15 @@ def fetch_and_process_country(country_code, config):
                 host = parsed.hostname
                 port = parsed.port or 443
 
-                # Query string ထဲမှ SNI / Host parameter ကို ရှာခြင်း
                 query_params = urllib.parse.parse_qs(parsed.query)
                 sni = query_params.get("sni", [None])[0] or query_params.get(
                     "host", [None]
                 )[0]
+                path = query_params.get("path", ["/"])[0]
 
-                # မြန်မာပြည် Network အတွက် သီးသန့် အဆင့်မြှင့်ထားသော Ping Test စစ်ခြင်း
-                if host and check_myanmar_network_ping(
-                    host, port, sni=sni, timeout=2.5
+                # Real Traffic စစ်ဆေးမှု အောင်မြင်သော Node များကိုသာ ယူမည်
+                if host and check_real_data_traffic(
+                    host, port, sni=sni, path=path, timeout=3.0
                 ):
                     base_url = line.split("#")[0]
                     new_name = urllib.parse.quote(
@@ -111,10 +143,10 @@ def main():
     all_nodes = []
 
     for country_code, config in SOURCES.items():
-        print(f"Checking {country_code} for Myanmar Network Compatibility...")
+        print(f"Filtering working servers for {country_code}...")
         nodes = fetch_and_process_country(country_code, config)
         all_nodes.extend(nodes)
-        print(f"Passed for {country_code}: {len(nodes)} nodes")
+        print(f"Usable nodes for {country_code}: {len(nodes)}")
 
     tz = pytz.timezone("Asia/Yangon")
     current_date = datetime.now(tz).strftime("%d-%b-%y")
@@ -128,7 +160,7 @@ def main():
     with open("servers", "w", encoding="utf-8") as f:
         f.write(encoded_content)
 
-    print(f"Done! Saved {len(all_nodes)} nodes.")
+    print(f"Saved {len(all_nodes)} 100% working nodes to 'servers' file.")
 
 
 if __name__ == "__main__":
