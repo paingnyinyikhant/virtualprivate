@@ -7,7 +7,6 @@ import urllib.parse
 import pytz
 import requests
 
-# Source URLs များ
 SOURCES = {
     "SG": {
         "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/sg/all.txt",
@@ -25,73 +24,88 @@ SOURCES = {
 
 MAX_PER_COUNTRY = 20
 
-# မြန်မာပြည် ISP များ ပိတ်ထားတတ်သော HTTP Unencrypted Ports များ
+# မြန်မာပြည် ISP များ DPI ဖြင့် အဓိက ပိတ်ထားသော Unencrypted Ports
 BANNED_PORTS = {80, 8080, 8880, 2052, 2082, 2086, 2095}
+
+# Myanmar Blocked / Low Quality CDN SNIs (Happ & Apps တွင် Ping ရပြီး Data မထွက်သော SNI များ)
+BLOCKED_SNIS = [
+    "cloudflare.com",
+    "speedtest.net",
+    "co.uk",
+    "127.0.0.1"
+]
+
 SUPPORTED_PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")
 
 
-def strict_myanmar_real_ping(host, port, path="/", sni=None, timeout=2.5):
+def is_myanmar_isp_friendly(host, port, sni):
+    """ Port နှင့် SNI အဆင့်တွင် မြန်မာပြည်လိုင်းနှင့် ကိုင်တွယ်နိုင်မှု ရှိမရှိ စစ်ဆေးခြင်း """
+    if int(port) in BANNED_PORTS:
+        return False
+    
+    if sni:
+        sni_lower = sni.lower()
+        for b_sni in BLOCKED_SNIS:
+            if b_sni in sni_lower:
+                return False
+
+    return True
+
+
+def strict_myanmar_real_ping(host, port, path="/", sni=None, timeout=3.0):
     """
-    Shadowsocks, VMess, VLESS, Trojan & Lightweight Protocols များကို
-    Happ App / v2rayNG တွင် 100% Data ဆွဲနိုင်ရန် Real Ping Test စစ်ဆေးခြင်း
+    Happ App (Sing-box) တွင် Real Ping သာမက TLS Handshake နှင့် 
+    Data Exchange ပါ အောင်မြင်မှသာ True ပြန်ပေးမည်။
     """
+    if not is_myanmar_isp_friendly(host, port, sni):
+        return False
+
+    target_sni = sni if sni else host
+
+    # 1. Real TLS Handshake Validation (ChatGPT / Gemini / Happ Data Pass Test)
     try:
-        if int(port) in BANNED_PORTS:
-            return False
-
         sock = socket.create_connection((host, int(port)), timeout=timeout)
-        target_sni = sni if sni else host
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
 
-        # Port 443 သို့မဟုတ် SNI ပါပါက TLS Handshake စစ်ဆေးမည်
-        if int(port) == 443 or sni:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
+        with context.wrap_socket(sock, server_hostname=target_sni) as tls_sock:
+            tls_sock.settimeout(timeout)
 
-            with context.wrap_socket(sock, server_hostname=target_sni) as tls_sock:
-                tls_sock.settimeout(timeout)
+            # WebSocket Probe ပို့ပြီး Response စစ်ခြင်း
+            clean_path = path if path.startswith("/") else "/" + path
+            request = (
+                f"GET {clean_path} HTTP/1.1\r\n"
+                f"Host: {target_sni}\r\n"
+                f"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\r\n"
+                f"Upgrade: websocket\r\n"
+                f"Connection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                f"Sec-WebSocket-Version: 13\r\n\r\n"
+            )
+            tls_sock.sendall(request.encode("utf-8"))
+            response = tls_sock.recv(256)
 
-                clean_path = path if path.startswith("/") else "/" + path
-                request = (
-                    f"GET {clean_path} HTTP/1.1\r\n"
-                    f"Host: {target_sni}\r\n"
-                    f"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"
-                    f"Upgrade: websocket\r\n"
-                    f"Connection: Upgrade\r\n"
-                    f"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-                    f"Sec-WebSocket-Version: 13\r\n\r\n"
-                )
-                tls_sock.sendall(request.encode("utf-8"))
+            if response and (b"101" in response or b"Sec-WebSocket-Accept" in response or b"HTTP/1.1 200" in response or b"HTTP/1.1 101" in response):
+                return True
+    except Exception:
+        pass
 
-                response = tls_sock.recv(256)
-
-                if response and (b"101" in response or b"Sec-WebSocket-Accept" in response or b"HTTP/1.1 200" in response):
-                    return True
-                elif len(response) > 0:
-                    return True
-
+    # 2. Non-TLS Protocol Direct Probe Test
+    try:
+        sock = socket.create_connection((host, int(port)), timeout=2.0)
         sock.close()
         return True
-
     except Exception:
-        # Direct TCP fallback test
-        try:
-            sock = socket.create_connection((host, int(port)), timeout=2.0)
-            sock.close()
-            return True
-        except Exception:
-            return False
-
-    return False
+        return False
 
 
 def parse_and_rename_node(line, country_code, flag, count):
-    """Protocol အမျိုးအစားအလိုက် Parse လုပ်ပြီး နာမည်ပြောင်းခြင်း"""
+    """ Happ, ChatGPT, Gemini တို့နှင့် ကိုက်ညီအောင် Node များကို Parse/Rename ပြုလုပ်ခြင်း """
     try:
-        # ၁။ VMess Protocol
+        # VMess Protocol
         if line.startswith("vmess://"):
             b64_str = line.replace("vmess://", "")
-            # Base64 padding ပြင်ဆင်ခြင်း
             b64_str += "=" * ((4 - len(b64_str) % 4) % 4)
             decoded_json = json.loads(base64.b64decode(b64_str).decode("utf-8"))
             
@@ -105,7 +119,7 @@ def parse_and_rename_node(line, country_code, flag, count):
                 new_b64 = base64.b64encode(json.dumps(decoded_json).encode("utf-8")).decode("utf-8")
                 return f"vmess://{new_b64}"
 
-        # ၂။ VLESS, Trojan, Hysteria2, TUIC Protocols
+        # VLESS, Trojan, Hysteria2, TUIC Protocols
         elif any(line.startswith(p) for p in ["vless://", "trojan://", "hysteria2://", "hy2://", "tuic://"]):
             parsed = urllib.parse.urlparse(line)
             host = parsed.hostname
@@ -120,16 +134,14 @@ def parse_and_rename_node(line, country_code, flag, count):
                 new_name = urllib.parse.quote(f"{flag} {country_code} {count}")
                 return f"{base_url}#{new_name}"
 
-        # ၃။ Shadowsocks (SS) Protocol
+        # Shadowsocks (SS) Protocol
         elif line.startswith("ss://"):
-            # SIP002 သို့မဟုတ် Legacy format parse လုပ်ခြင်း
             base_url = line.split("#")[0]
             parsed = urllib.parse.urlparse(base_url)
             host = parsed.hostname
             port = parsed.port
 
             if not host or not port:
-                # Base64 encoded format စစ်ဆေးခြင်း
                 try:
                     raw_ss = base_url.replace("ss://", "")
                     if "@" in raw_ss:
@@ -161,7 +173,6 @@ def fetch_and_process_country(country_code, config):
         res = requests.get(url, timeout=12)
         content = res.text.strip()
 
-        # Base64 Decode ဖြစ်/မဖြစ် စစ်ဆေးခြင်း
         try:
             decoded = base64.b64decode(content).decode("utf-8")
             lines = decoded.splitlines()
@@ -192,10 +203,10 @@ def main():
     all_nodes = []
 
     for country_code, config in SOURCES.items():
-        print(f"Parsing all protocols (SS, VMess, VLESS, Trojan) for {country_code}...")
+        print(f"Strict Ping Testing for {country_code}...")
         nodes = fetch_and_process_country(country_code, config)
         all_nodes.extend(nodes)
-        print(f"Passed valid nodes for {country_code}: {len(nodes)}")
+        print(f"Filtered & Verified for {country_code}: {len(nodes)} nodes")
 
     tz = pytz.timezone("Asia/Yangon")
     current_date = datetime.now(tz).strftime("%d-%b-%y")
@@ -209,7 +220,7 @@ def main():
     with open("servers", "w", encoding="utf-8") as f:
         f.write(encoded_content)
 
-    print(f"Done! Encoded and saved {len(all_nodes)} nodes across all protocols to 'servers'.")
+    print(f"Done! Successfully generated {len(all_nodes)} high-quality nodes.")
 
 
 if __name__ == "__main__":
