@@ -32,8 +32,9 @@ ALLOWED_PORTS = {2096, 8388, 8443, 2053, 2083, 2087}
 BLOCKED_SNIS = ["cloudflare.com", "speedtest.net", "co.uk", "127.0.0.1"]
 SUPPORTED_PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")
 
-# 🛡️ Safe AdBlock DNS Servers (Video Streaming မပျက်ဘဲ Ads / Trackers များကို သာ ပိတ်ပေးသည်)
-ADBLOCK_DNS = "94.140.14.14"
+# 🛡️ APK / Game Ads ပါ ပိတ်ပေးမည့် Safe AdBlock DNS List
+ADBLOCK_DNS_PRIMARY = "94.140.14.14"      # AdGuard Default AdBlock
+ADBLOCK_DNS_SECONDARY = "1.1.1.2"        # Cloudflare Malware & Ads Block
 
 
 def strict_myanmar_real_ping(host, port, path="/", sni=None):
@@ -191,17 +192,17 @@ def fetch_and_process_country(country_code, config):
             if item["type"] == "vmess":
                 data = item["data"]
                 data["ps"] = clean_name
-                # AdBlock ဖြစ်ပါက VMess Extra DNS Properties တွင် Embedded လုပ်ပေးခြင်း
+                # VMess Config ထဲသို့ APK / Mobile Game Ads များ ပိတ်မည့် DNS Rules တိုက်ရိုက်ထည့်ခြင်း
                 if is_adblock:
-                    data["dns"] = ADBLOCK_DNS
+                    data["dns"] = f"{ADBLOCK_DNS_PRIMARY},{ADBLOCK_DNS_SECONDARY}"
                 new_b64 = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
                 formatted.append(f"vmess://{new_b64}")
             else:
                 base_url = raw.split("#")[0]
-                # VLESS/Trojan/SS Dynamic Parameter injection for AdBlock
+                # VLESS/Trojan Dynamic Parameters ထဲသို့ APK Ads Block DNS များ ပေါင်းထည့်ခြင်း
                 if is_adblock:
                     delimiter = "&" if "?" in base_url else "?"
-                    base_url = f"{base_url}{delimiter}dns={ADBLOCK_DNS}"
+                    base_url = f"{base_url}{delimiter}dns={ADBLOCK_DNS_PRIMARY}&dns2={ADBLOCK_DNS_SECONDARY}"
 
                 new_name = urllib.parse.quote(clean_name)
                 formatted.append(f"{base_url}#{new_name}")
@@ -234,7 +235,7 @@ def main():
     with open("servers", "w", encoding="utf-8") as f:
         f.write(encoded_content)
 
-    print(f"Done! Created 'servers' with selective AdBlock enabled.")
+    print(f"Done! Created 'servers' with APK AdBlock rules.")
 
 
 if __name__ == "__main__":
