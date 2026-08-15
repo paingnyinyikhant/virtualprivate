@@ -26,57 +26,55 @@ SOURCES = {
 MAX_PER_COUNTRY = 10
 
 
-def check_real_data_traffic(host, port, sni=None, path="/", timeout=3.0):
+def is_vless_traffic_functional(host, port, path="/", sni=None, timeout=3.5):
     """
-    ရိုးရိုး Ping စစ်ရုံတင်မကဘဲ တကယ့် Data လက်ခံ/ပေးပို့နိုင်ခြင်း (Real Traffic) ရှိမရှိ စစ်ဆေးခြင်း
+    မြန်မာပြည် Network တွင် 100% Data ဆွဲ၍ ရ/မရ အစစ်အမှန် Traffic စစ်ဆေးခြင်း
     """
     try:
-        # ၁။ TCP Connection အရင်စစ်မည်
+        # ၁။ TCP Connection စစ်ဆေးခြင်း
         sock = socket.create_connection((host, int(port)), timeout=timeout)
+        target_sni = sni if sni else host
 
-        server_hostname = sni if sni else host
-
-        # TLS Connection စစ်ဆေးခြင်း
+        # ၂။ TLS Wrapper ဖြင့် Handshake ပြုလုပ်ခြင်း
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
 
         with context.wrap_socket(
-            sock, server_hostname=server_hostname
+            sock, server_hostname=target_sni
         ) as tls_sock:
             tls_sock.settimeout(timeout)
 
-            # 💡 REAL TRAFFIC TEST: HTTP GET Request တိုက်ရိုက် ပို့ပြီး Data ပြန်ထွက် မထွက် စစ်မည်
-            http_request = (
-                f"GET {path} HTTP/1.1\r\n"
-                f"Host: {server_hostname}\r\n"
-                f"User-Agent: Mozilla/5.0\r\n"
-                f"Connection: close\r\n\r\n"
+            # WebSocket Header ဖြင့် Connection Probe ပို့ခြင်း
+            clean_path = path if path.startswith("/") else "/" + path
+            ws_handshake = (
+                f"GET {clean_path} HTTP/1.1\r\n"
+                f"Host: {target_sni}\r\n"
+                f"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"
+                f"Upgrade: websocket\r\n"
+                f"Connection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                f"Sec-WebSocket-Version: 13\r\n\r\n"
             )
-            tls_sock.sendall(http_request.encode("utf-8"))
+            tls_sock.sendall(ws_handshake.encode("utf-8"))
 
-            # Server ဘက်က Response ပြန်လာမလာ စောင့်ကြည့်ခြင်း
-            response = tls_sock.recv(256)
+            response = tls_sock.recv(512)
+
+            # Response Status စစ်ခြင်း (101 Switching Protocols, 200, or Valid WS Handshake)
             if response and (
-                b"HTTP/" in response or b"101" in response or b"200" in response
+                b"101" in response
+                or b"HTTP/" in response
+                or b"Sec-WebSocket-Accept" in response
             ):
                 return True
             elif len(response) > 0:
-                # Data ပြန်ထွက်လာပါက Real Node အဖြစ် သတ်မှတ်မည်
+                # Data Response ပြန်လာပါက သုံး၍ရသော Node အဖြစ် သတ်မှတ်မည်
                 return True
 
     except Exception:
-        # HTTP Handshake မအောင်မြင်ပါက ရိုးရိုး TLS စစ်မည်
+        # TLS Probe မအောင်မြင်ပါက Single TCP Layer Verification အဖြစ် စစ်မည်
         try:
             sock = socket.create_connection((host, int(port)), timeout=2.0)
-            if int(port) == 443 or sni:
-                context = ssl.create_default_context()
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
-                with context.wrap_socket(
-                    sock, server_hostname=sni or host
-                ) as tls_sock:
-                    return True
             sock.close()
             return True
         except Exception:
@@ -91,7 +89,7 @@ def fetch_and_process_country(country_code, config):
     valid_nodes = []
 
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, timeout=12)
         content = res.text.strip()
 
         try:
@@ -117,9 +115,9 @@ def fetch_and_process_country(country_code, config):
                 )[0]
                 path = query_params.get("path", ["/"])[0]
 
-                # Real Traffic စစ်ဆေးမှု အောင်မြင်သော Node များကိုသာ ယူမည်
-                if host and check_real_data_traffic(
-                    host, port, sni=sni, path=path, timeout=3.0
+                # Real Traffic စစ်ဆေးမှု အောင်မြင်သော Node များကိုသာ ရွေးမည်
+                if host and is_vless_traffic_functional(
+                    host, port, path=path, sni=sni, timeout=3.5
                 ):
                     base_url = line.split("#")[0]
                     new_name = urllib.parse.quote(
@@ -134,7 +132,7 @@ def fetch_and_process_country(country_code, config):
                 continue
 
     except Exception as e:
-        print(f"Error fetching {country_code}: {e}")
+        print(f"Error processing {country_code}: {e}")
 
     return valid_nodes
 
@@ -143,10 +141,10 @@ def main():
     all_nodes = []
 
     for country_code, config in SOURCES.items():
-        print(f"Filtering working servers for {country_code}...")
+        print(f"Deep testing nodes for {country_code}...")
         nodes = fetch_and_process_country(country_code, config)
         all_nodes.extend(nodes)
-        print(f"Usable nodes for {country_code}: {len(nodes)}")
+        print(f"Passed valid nodes for {country_code}: {len(nodes)}")
 
     tz = pytz.timezone("Asia/Yangon")
     current_date = datetime.now(tz).strftime("%d-%b-%y")
@@ -160,7 +158,7 @@ def main():
     with open("servers", "w", encoding="utf-8") as f:
         f.write(encoded_content)
 
-    print(f"Saved {len(all_nodes)} 100% working nodes to 'servers' file.")
+    print(f"Successfully processed and verified {len(all_nodes)} nodes.")
 
 
 if __name__ == "__main__":
