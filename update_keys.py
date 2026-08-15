@@ -23,7 +23,7 @@ SOURCES = {
     },
 }
 
-MAX_PER_COUNTRY = 20
+MAX_PER_COUNTRY = 10
 
 
 def check_real_data_traffic(host, port, sni=None, path="/", timeout=3.0):
