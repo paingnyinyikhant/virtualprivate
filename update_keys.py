@@ -9,7 +9,7 @@ import urllib.parse
 import pytz
 import requests
 import sys
-import re
+import random
 
 # ==============================================================================
 # ⚙️ CONFIGURATION - မြန်မာနိုင်ငံ GFW ကျော်လွှားရန် အထူးပြင်ဆင်ထားသည်
@@ -30,7 +30,7 @@ SOURCES = {
     },
 }
 
-MAX_PER_COUNTRY = 30
+MAX_PER_COUNTRY = 20  # နိုင်ငံတစ်ခုကို Ping အကောင်းဆုံး 20
 
 # 🎯 Port 443 အပါအဝင် GFW ကျော်ရန် အကောင်းဆုံး Port များ
 PRIORITY_PORTS = {443, 2096, 8443}
@@ -40,19 +40,19 @@ ALLOWED_PORTS = {443, 2096, 8388, 8443, 2053, 2083, 2087, 2052, 2082, 2086, 2095
 BLOCKED_SNIS = [
     "cloudflare.com", "speedtest.net", "co.uk", "127.0.0.1",
     "localhost", "example.com", "test.com", "0.0.0.0",
-    "google.com",  # GFW fingerprint detection တွင် သုံးတတ်
+    "google.com",
 ]
 
 # ✅ GFW ကျော်ရန် အကောင်းဆုံး Protocol Features
 GFW_BYPASS_FEATURES = {
-    "reality": 10,      # VLESS+Reality - အကောင်းဆုံး (TLS fingerprint ကို ဖုံးထား)
-    "xtls-rprx-vision": 8,  # XTLS Vision flow
-    "grpc": 7,          # gRPC transport - HTTP/2 multiplexing
-    "ws": 5,            # WebSocket - HTTP upgrade ထဲ ဝင်
-    "httpupgrade": 6,   # HTTPUpgrade
-    "splithttp": 6,     # SplitHTTP
-    "h2": 5,            # HTTP/2
-    "tcp": 3,           # Raw TCP (အနည်းဆုံး)
+    "reality": 10,
+    "xtls-rprx-vision": 8,
+    "grpc": 7,
+    "ws": 5,
+    "httpupgrade": 6,
+    "splithttp": 6,
+    "h2": 5,
+    "tcp": 3,
 }
 
 SUPPORTED_PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")
@@ -63,14 +63,17 @@ FB_ADS_BLOCK_PARAMS = (
     "pixel.facebook.com,connect.facebook.net/adnw"
 )
 
-# Connection timeout settings (မြန်မာ့ network အတွက် adjusted)
-TCP_TIMEOUT = 3.0        # TCP connect timeout
-TLS_TIMEOUT = 4.0        # TLS handshake timeout
-RESPONSE_TIMEOUT = 5.0   # HTTP response timeout
+# Connection timeout settings
+TCP_TIMEOUT = 3.0
+TLS_TIMEOUT = 5.0
+RESPONSE_TIMEOUT = 6.0
+
+# 🇲🇲 မြန်မာနိုင်ငံနှင့် ပိုကိုက်ညီအောင် Test ပိုလုပ်မည်
+PING_TESTS = 3  # တစ်ခုချင်းကို 3 ကြိမ် test ပြီး average ယူမည်
 
 
 # ==============================================================================
-# 🔍 DETAILED NODE ANALYSIS - Key တစ်ခုချင်း အသေးစိတ် စစ်ဆေးခြင်း
+# 🔍 DETAILED NODE ANALYSIS
 # ==============================================================================
 
 def get_protocol_details(line):
@@ -89,14 +92,14 @@ def get_protocol_details(line):
         "uuid": None,
         "encryption": "none",
         "alpn": None,
-        "fp": None,          # TLS fingerprint (uTLS)
-        "pbk": None,         # Reality public key
-        "sid": None,         # Reality short ID
-        "servername": None,  # Reality dest server
+        "fp": None,
+        "pbk": None,
+        "sid": None,
+        "servername": None,
         "raw": line,
-        "gfw_score": 0,      # GFW bypass score (မြင့်လေ ကောင်းလေ)
-        "issues": [],        # ပြဿနာများ
-        "features": [],      # ကောင်းသော features များ
+        "gfw_score": 0,
+        "issues": [],
+        "features": [],
     }
 
     try:
@@ -119,7 +122,6 @@ def get_protocol_details(line):
             details["encryption"] = decoded.get("scy", "auto")
             details["alpn"] = decoded.get("alpn")
             
-            # VMess specific checks
             if decoded.get("tls") == "tls":
                 details["gfw_score"] += 3
                 details["features"].append("TLS encryption")
@@ -155,14 +157,13 @@ def get_protocol_details(line):
             details["servername"] = query_params.get("sni", [None])[0]
             details["encryption"] = query_params.get("encryption", ["none"])[0]
             
-            # GFW bypass scoring for VLESS
             security = details["security"]
             transport = details["transport"]
             flow = details["flow"]
             
             if security == "reality":
                 details["gfw_score"] += 10
-                details["features"].append("🛡️ REALITY (GFW ကျော်ရန် အကောင်းဆုံး)")
+                details["features"].append("🛡️ REALITY")
                 if details["pbk"]:
                     details["features"].append("Reality Public Key ရှိ")
                 if details["fp"]:
@@ -173,7 +174,7 @@ def get_protocol_details(line):
                 
             if flow and "xtls-rprx-vision" in flow:
                 details["gfw_score"] += 8
-                details["features"].append(f"🔥 XTLS Vision flow ({flow})")
+                details["features"].append(f"🔥 XTLS Vision flow")
                 
             if transport in GFW_BYPASS_FEATURES:
                 score = GFW_BYPASS_FEATURES[transport]
@@ -182,7 +183,7 @@ def get_protocol_details(line):
                 
             if details["fp"]:
                 details["gfw_score"] += 2
-                details["features"].append(f"uTLS fingerprint spoofing: {details['fp']}")
+                details["features"].append(f"uTLS fingerprint: {details['fp']}")
                 
         elif line.startswith("trojan://"):
             details["protocol"] = "trojan"
@@ -200,9 +201,8 @@ def get_protocol_details(line):
             details["network"] = query_params.get("type", ["tcp"])[0]
             details["fp"] = query_params.get("fp", [None])[0]
             
-            # Trojan is inherently good for GFW bypass
             details["gfw_score"] += 6
-            details["features"].append("🐴 Trojan protocol (HTTPS traffic ကဲ့သို့ မြင်ရ)")
+            details["features"].append("🐴 Trojan protocol")
             
             if details["transport"] == "ws":
                 details["gfw_score"] += 4
@@ -239,17 +239,16 @@ def get_protocol_details(line):
             details["path"] = "/"
             details["security"] = "ss_encryption"
             
-            # Shadowsocks - detect plugin
             query_params = urllib.parse.parse_qs(parsed.query) if parsed.query else {}
             plugin = query_params.get("plugin", [None])[0]
             if plugin:
                 details["features"].append(f"Plugin: {plugin}")
                 if "v2ray-plugin" in plugin or "obfs" in plugin:
                     details["gfw_score"] += 4
-                    details["features"].append("Obfuscation plugin ရှိ")
+                    details["features"].append("Obfuscation plugin")
             else:
                 details["gfw_score"] += 2
-                details["issues"].append("⚠️ Plain SS - GFW မှ ဖမ်းမိနိုင်")
+                details["issues"].append("⚠️ Plain SS")
                 
         elif line.startswith(("hysteria2://", "hy2://")):
             details["protocol"] = "hysteria2"
@@ -261,10 +260,9 @@ def get_protocol_details(line):
             details["port"] = int(parsed.port or 443)
             details["sni"] = query_params.get("sni", [None])[0]
             
-            # Hysteria2 uses QUIC - can be good but may be blocked
             details["gfw_score"] += 5
-            details["features"].append("🚀 Hysteria2 (QUIC-based, fast)")
-            details["issues"].append("⚠️ QUIC/UDP - ISP မှ throttle လုပ်နိုင်")
+            details["features"].append("🚀 Hysteria2 (QUIC)")
+            details["issues"].append("⚠️ QUIC/UDP")
             
         elif line.startswith("tuic://"):
             details["protocol"] = "tuic"
@@ -277,8 +275,8 @@ def get_protocol_details(line):
             details["sni"] = query_params.get("sni", [None])[0]
             
             details["gfw_score"] += 6
-            details["features"].append("🚀 TUIC (QUIC+TLS, fast & stealthy)")
-            details["issues"].append("⚠️ QUIC/UDP - ISP မှ throttle လုပ်နိုင်")
+            details["features"].append("🚀 TUIC (QUIC+TLS)")
+            details["issues"].append("⚠️ QUIC/UDP")
 
     except Exception as e:
         details["issues"].append(f"❌ Parse error: {str(e)}")
@@ -287,26 +285,17 @@ def get_protocol_details(line):
 
 
 # ==============================================================================
-# 🏓 ADVANCED CONNECTIVITY TEST - မြန်မာ့ Network အတွက် စစ်ဆေးခြင်း
+# 🏓 ADVANCED CONNECTIVITY TEST - မြန်မာ့ Network အတွက် တင်းကြပ်စွာ စစ်ဆေး
 # ==============================================================================
 
-def dns_resolve(host):
-    """DNS resolution check"""
-    try:
-        ip = socket.getaddrinfo(host, None)[0][4][0]
-        return ip
-    except Exception:
-        return None
-
-
 def tcp_connect_test(host, port, timeout=TCP_TIMEOUT):
-    """TCP connection test with latency measurement"""
+    """TCP connection test with latency"""
     try:
         start = time.time()
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         sock.connect((host, port))
-        latency = (time.time() - start) * 1000  # ms
+        latency = (time.time() - start) * 1000
         sock.close()
         return True, round(latency, 1)
     except socket.timeout:
@@ -318,16 +307,11 @@ def tcp_connect_test(host, port, timeout=TCP_TIMEOUT):
 
 
 def tls_handshake_test(host, port, sni=None, timeout=TLS_TIMEOUT):
-    """TLS handshake test - certificate and protocol check"""
+    """TLS handshake test"""
     result = {
         "success": False,
         "protocol": None,
         "cipher": None,
-        "cert_valid": False,
-        "cert_subject": None,
-        "cert_issuer": None,
-        "cert_expiry": None,
-        "alpn": None,
         "latency_ms": -1,
     }
     
@@ -349,28 +333,8 @@ def tls_handshake_test(host, port, sni=None, timeout=TLS_TIMEOUT):
             result["protocol"] = tls_sock.version()
             result["cipher"] = tls_sock.cipher()
             result["success"] = True
-            
-            # Certificate details
-            cert = tls_sock.getpeercert(binary_form=False)
-            if cert:
-                result["cert_valid"] = True
-                subject = dict(x[0] for x in cert.get("subject", ()))
-                result["cert_subject"] = subject.get("commonName", "unknown")
-                issuer = dict(x[0] for x in cert.get("issuer", ()))
-                result["cert_issuer"] = issuer.get("organizationName", issuer.get("commonName", "unknown"))
-                result["cert_expiry"] = cert.get("notAfter", "unknown")
-            
-            try:
-                result["alpn"] = tls_sock.selected_alpn_protocol()
-            except Exception:
-                pass
-                
             tls_sock.close()
             
-    except ssl.SSLError as e:
-        result["error"] = f"SSL Error: {str(e)[:80]}"
-    except socket.timeout:
-        result["error"] = "TLS timeout"
     except Exception as e:
         result["error"] = str(e)[:80]
         
@@ -405,28 +369,19 @@ def http_probe_test(host, port, path="/", sni=None, timeout=RESPONSE_TIMEOUT):
             tls_sock.close()
             
             if len(response) > 0:
-                resp_text = response.decode("utf-8", errors="ignore")
-                status_code = None
-                if resp_text.startswith("HTTP/"):
-                    parts = resp_text.split(" ", 2)
-                    if len(parts) >= 2:
-                        try:
-                            status_code = int(parts[1])
-                        except ValueError:
-                            pass
-                return True, status_code, len(response)
-            return False, None, 0
+                return True, len(response)
+            return False, 0
             
     except Exception:
-        return False, None, 0
+        return False, 0
 
 
 # ==============================================================================
-# 🧪 COMPREHENSIVE NODE TEST - Key တစ်ခုချင်း အပြည့်အစုံ စစ်ဆေးခြင်း
+# 🧪 COMPREHENSIVE NODE TEST - Multiple Ping Tests for Myanmar
 # ==============================================================================
 
 def comprehensive_test(node_info):
-    """Key တစ်ခုချင်းစီကို အပြည့်အစုံ စစ်ဆေးသည်"""
+    """Key တစ်ခုချင်းစီကို Multiple times စစ်ဆေးသည်"""
     host = node_info["host"]
     port = node_info["port"]
     sni = node_info.get("sni")
@@ -436,188 +391,180 @@ def comprehensive_test(node_info):
     result = {
         "node": node_info,
         "passed": False,
-        "dns_ok": False,
         "tcp_ok": False,
         "tls_ok": False,
         "http_ok": False,
-        "tcp_latency": -1,
-        "tls_latency": -1,
-        "ip": None,
+        "avg_tcp_latency": -1,
+        "avg_tls_latency": -1,
+        "latencies": [],
         "tls_details": {},
-        "http_status": None,
         "final_score": 0,
         "verdict": "FAIL",
-        "verdict_reason": "",
+        "tests_passed": 0,
+        "tests_total": 0,
     }
     
     # Step 0: Basic validation
     if not host or not port:
-        result["verdict_reason"] = "Host သို့ Port မရှိ"
         return result
         
     # Step 1: Port check
     if port not in ALLOWED_PORTS:
-        result["verdict_reason"] = f"Port {port} ခွင့်မပြု"
         return result
     
     # Step 2: SNI block check
     if sni and any(b in sni.lower() for b in BLOCKED_SNIS):
-        result["verdict_reason"] = f"SNI '{sni}' ပိတ်ထားသော domain"
-        # Don't fully block, just penalize
         node_info["gfw_score"] -= 5
         node_info["issues"].append(f"⚠️ SNI '{sni}' သံသယရှိ")
     
-    # Step 3: DNS Resolution
-    ip = dns_resolve(host)
-    if ip:
-        result["dns_ok"] = True
-        result["ip"] = ip
-    else:
-        # DNS fail might be temporary, don't block
-        node_info["issues"].append("⚠️ DNS resolve မရ")
+    # Step 3: Multiple TCP + TLS tests
+    tcp_latencies = []
+    tls_latencies = []
+    tls_success_count = 0
+    tcp_success_count = 0
     
-    # Step 4: TCP Connection
-    tcp_ok, tcp_latency = tcp_connect_test(host, port)
-    result["tcp_ok"] = tcp_ok
-    result["tcp_latency"] = tcp_latency
-    
-    if not tcp_ok:
-        if tcp_latency == -1:
-            result["verdict_reason"] = f"TCP timeout (Port {port})"
-        elif tcp_latency == -2:
-            result["verdict_reason"] = f"TCP connection refused (Port {port})"
-        else:
-            result["verdict_reason"] = f"TCP connection failed (Port {port})"
-        return result
-    
-    # Step 5: TLS Handshake (for TLS-based protocols or port 443/HTTPS ports)
     tls_ports = {443, 2096, 8443, 2053, 2083, 2087}
     is_tls_protocol = protocol in ("vless", "trojan", "vmess", "tuic", "hysteria2")
+    need_tls = port in tls_ports or is_tls_protocol
     
-    if port in tls_ports or is_tls_protocol:
-        tls_result = tls_handshake_test(host, port, sni=sni)
-        result["tls_ok"] = tls_result["success"]
-        result["tls_latency"] = tls_result["latency_ms"]
-        result["tls_details"] = tls_result
+    for test_num in range(PING_TESTS):
+        # Small random delay between tests
+        time.sleep(random.uniform(0.1, 0.3))
         
-        if tls_result["success"]:
-            # Good TLS indicators
-            if tls_result.get("protocol") in ("TLSv1.3", "TLSv1.2"):
-                node_info["features"].append(f"TLS: {tls_result['protocol']}")
-            if tls_result.get("cipher"):
-                cipher_name = tls_result["cipher"][0] if isinstance(tls_result["cipher"], tuple) else str(tls_result["cipher"])
-                node_info["features"].append(f"Cipher: {cipher_name[:40]}")
-            if tls_result.get("cert_issuer"):
-                node_info["features"].append(f"Cert issuer: {tls_result['cert_issuer']}")
-        else:
-            # TLS fail for TLS protocols is bad
-            if is_tls_protocol and protocol not in ("ss",):
-                node_info["issues"].append(f"TLS handshake fail: {tls_result.get('error', 'unknown')}")
+        # TCP test
+        tcp_ok, tcp_lat = tcp_connect_test(host, port)
+        if tcp_ok:
+            tcp_success_count += 1
+            tcp_latencies.append(tcp_lat)
+        
+        # TLS test
+        if need_tls and tcp_ok:
+            tls_result = tls_handshake_test(host, port, sni=sni)
+            if tls_result["success"]:
+                tls_success_count += 1
+                tls_latencies.append(tls_result["latency_ms"])
+                result["tls_details"] = tls_result
+    
+    result["tests_total"] = PING_TESTS
+    
+    # Strict: TCP must pass majority of tests
+    if tcp_success_count < (PING_TESTS // 2 + 1):
+        result["tcp_ok"] = False
+        return result
+    
+    result["tcp_ok"] = True
+    result["avg_tcp_latency"] = round(sum(tcp_latencies) / len(tcp_latencies), 1) if tcp_latencies else -1
+    
+    # TLS check
+    if need_tls:
+        if tls_success_count < (PING_TESTS // 2 + 1):
+            result["tls_ok"] = False
+            return result
+        result["tls_ok"] = True
+        result["avg_tls_latency"] = round(sum(tls_latencies) / len(tls_latencies), 1) if tls_latencies else -1
     else:
-        # Non-TLS port - just TCP is enough
         result["tls_ok"] = True
     
-    # Step 6: HTTP Probe (optional - for websocket/http transports)
+    result["tests_passed"] = min(tcp_success_count, tls_success_count) if need_tls else tcp_success_count
+    
+    # HTTP probe for websocket/http transports
     transport = node_info.get("transport", "tcp")
     if transport in ("ws", "httpupgrade", "splithttp", "h2") and result["tls_ok"]:
-        http_ok, http_status, resp_size = http_probe_test(host, port, path=path, sni=sni)
+        http_ok, resp_size = http_probe_test(host, port, path=path, sni=sni)
         result["http_ok"] = http_ok
-        result["http_status"] = http_status
-        
-        if http_ok and http_status:
-            node_info["features"].append(f"HTTP response: {http_status}")
+        if not http_ok:
+            # HTTP probe fail doesn't kill it, just penalize
+            node_info["gfw_score"] -= 2
     
-    # Step 7: Calculate final score
+    # Calculate final score
     score = node_info.get("gfw_score", 0)
     
     # Port bonus
     if port == 443:
-        score += 5  # Port 443 is best for GFW bypass
-        node_info["features"].append("✅ Port 443 (HTTPS traffic ကဲ့သို့)")
+        score += 5
+        node_info["features"].append("✅ Port 443")
     elif port in PRIORITY_PORTS:
         score += 3
     
-    # Latency bonus (lower is better for Myanmar)
-    latency = result["tls_latency"] if result["tls_latency"] > 0 else result["tcp_latency"]
+    # Latency scoring (မြန်မာအတွက် adjusted)
+    latency = result["avg_tls_latency"] if result["avg_tls_latency"] > 0 else result["avg_tcp_latency"]
     if 0 < latency < 100:
-        score += 5
+        score += 6
     elif 0 < latency < 200:
-        score += 3
+        score += 4
     elif 0 < latency < 400:
-        score += 1
+        score += 2
+    elif 0 < latency < 600:
+        score += 0
     elif latency > 800:
-        score -= 3
-        node_info["issues"].append("⚠️ Latency မြင့် (>800ms)")
+        score -= 4
+        node_info["issues"].append("⚠️ Latency >800ms")
     
-    # Penalize issues
-    score -= len([i for i in node_info.get("issues", []) if "❌" in i]) * 3
+    # Consistency bonus (stable connection = better)
+    if result["tests_passed"] == PING_TESTS:
+        score += 3
+        node_info["features"].append(f"✅ All {PING_TESTS}/{PING_TESTS} tests passed")
+    elif result["tests_passed"] >= PING_TESTS - 1:
+        score += 1
+        node_info["features"].append(f"⚠️ {result['tests_passed']}/{PING_TESTS} tests passed")
     
     result["final_score"] = score
-    result["passed"] = result["tcp_ok"] and (result["tls_ok"] or port not in tls_ports)
+    result["passed"] = True
     
-    if result["passed"]:
-        if score >= 15:
-            result["verdict"] = "🟢 EXCELLENT"
-        elif score >= 10:
-            result["verdict"] = "🟡 GOOD"
-        elif score >= 5:
-            result["verdict"] = "🟠 FAIR"
-        else:
-            result["verdict"] = "🔴 WEAK"
+    if score >= 15:
+        result["verdict"] = "🟢 EXCELLENT"
+    elif score >= 10:
+        result["verdict"] = "🟡 GOOD"
+    elif score >= 5:
+        result["verdict"] = "🟠 FAIR"
     else:
-        result["verdict"] = "❌ FAIL"
+        result["verdict"] = "🔴 WEAK"
     
     return result
 
 
 # ==============================================================================
-# 📋 DETAILED REPORTING - ရလဒ်များကို အသေးစိတ် ပြသခြင်း
+# 📋 DETAILED REPORTING
 # ==============================================================================
 
-def print_node_report(test_result, index):
+def print_node_report(test_result, index, country_code, flag):
     """Key တစ်ခုချင်း၏ စစ်ဆေးရလဒ်ကို အသေးစိတ် print"""
     node = test_result["node"]
-    print(f"\n{'='*70}")
-    print(f"  🔑 Key #{index}: {node['protocol'].upper()} | {node['host']}:{node['port']}")
-    print(f"{'='*70}")
+    latency = test_result["avg_tls_latency"] if test_result["avg_tls_latency"] > 0 else test_result["avg_tcp_latency"]
+    
+    print(f"\n  {'─'*66}")
+    print(f"  🔑 {flag} {country_code} {index} | {node['protocol'].upper()} | {node['host']}:{node['port']}")
+    print(f"  {'─'*66}")
     
     # Connection Results
-    print(f"  📡 DNS Resolution:  {'✅ ' + str(test_result['ip']) if test_result['dns_ok'] else '❌ Failed'}")
-    print(f"  🔌 TCP Connect:     {'✅ OK' if test_result['tcp_ok'] else '❌ FAIL'} | Latency: {test_result['tcp_latency']}ms")
-    print(f"  🔒 TLS Handshake:   {'✅ OK' if test_result['tls_ok'] else '⏭️ N/A'} | Latency: {test_result['tls_latency']}ms")
-    if test_result.get("http_ok"):
-        print(f"  🌐 HTTP Probe:      ✅ OK | Status: {test_result['http_status']}")
+    print(f"     🔌 TCP: ✅ {test_result['avg_tcp_latency']}ms (avg of {PING_TESTS})")
+    if test_result["avg_tls_latency"] > 0:
+        print(f"     🔒 TLS: ✅ {test_result['avg_tls_latency']}ms (avg of {PING_TESTS})")
+    print(f"     📊 Tests: {test_result['tests_passed']}/{test_result['tests_total']} passed")
     
     # TLS Details
     tls = test_result.get("tls_details", {})
     if tls.get("success"):
-        print(f"  📜 TLS Version:     {tls.get('protocol', 'N/A')}")
-        if tls.get("cert_issuer"):
-            print(f"  🏢 Cert Issuer:     {tls['cert_issuer']}")
+        print(f"     📜 TLS: {tls.get('protocol', 'N/A')}")
     
     # Protocol Details
-    print(f"  📦 Protocol:        {node['protocol'].upper()}")
-    print(f"  🚀 Transport:       {node.get('transport', 'tcp')}")
-    print(f"  🛡️ Security:        {node.get('security', 'unknown')}")
+    print(f"     📦 {node['protocol'].upper()} | Transport: {node.get('transport', 'tcp')} | Security: {node.get('security', 'unknown')}")
     if node.get("flow") and node["flow"] != "none":
-        print(f"  🌊 Flow:            {node['flow']}")
+        print(f"     🌊 Flow: {node['flow']}")
     if node.get("sni"):
-        print(f"  🏷️ SNI:             {node['sni']}")
+        print(f"     🏷️ SNI: {node['sni']}")
     
-    # GFW Score & Features
-    print(f"\n  📊 GFW Bypass Score: {test_result['final_score']} | Verdict: {test_result['verdict']}")
+    # Score & Verdict
+    print(f"     📊 Score: {test_result['final_score']} | {test_result['verdict']} | Latency: {latency}ms")
     
     if node.get("features"):
-        print(f"  ✨ Features:")
         for f in node["features"]:
-            print(f"     • {f}")
+            print(f"        ✨ {f}")
     
     if node.get("issues"):
-        print(f"  ⚠️ Issues:")
         for i in node["issues"]:
-            print(f"     • {i}")
+            print(f"        ⚠️ {i}")
     
-    print(f"{'─'*70}")
     return test_result["passed"]
 
 
@@ -630,10 +577,10 @@ def fetch_and_process_country(country_code, config, verbose=True):
     flag = config["flag"]
 
     if verbose:
-        print(f"\n{'#'*70}")
+        print(f"\n{'='*70}")
         print(f"  🌍 Country: {country_code} {flag}")
         print(f"  📥 Source: {url}")
-        print(f"{'#'*70}")
+        print(f"{'='*70}")
 
     try:
         res = requests.get(url, timeout=15)
@@ -656,30 +603,19 @@ def fetch_and_process_country(country_code, config, verbose=True):
         if verbose:
             print(f"\n  📊 Total keys found: {len(all_nodes)}")
             
-            # Protocol breakdown
             proto_counts = {}
             for n in all_nodes:
                 p = n["protocol"]
                 proto_counts[p] = proto_counts.get(p, 0) + 1
             for p, c in sorted(proto_counts.items(), key=lambda x: -x[1]):
                 print(f"     {p.upper()}: {c}")
-            
-            # Port distribution
-            port_counts = {}
-            for n in all_nodes:
-                p = n["port"]
-                port_counts[p] = port_counts.get(p, 0) + 1
-            print(f"\n  📊 Port distribution:")
-            for p, c in sorted(port_counts.items(), key=lambda x: -x[1]):
-                marker = "⭐" if p in PRIORITY_PORTS else "  "
-                print(f"     {marker} Port {p}: {c}")
 
         # Test each node
         if verbose:
-            print(f"\n  🧪 Testing {len(all_nodes)} keys...\n")
+            print(f"\n  🧪 Testing {len(all_nodes)} keys ({PING_TESTS}x each)...\n")
         
         test_results = []
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=15) as executor:
             futures = {executor.submit(comprehensive_test, node): node for node in all_nodes}
             for future in as_completed(futures):
                 try:
@@ -688,56 +624,37 @@ def fetch_and_process_country(country_code, config, verbose=True):
                 except Exception as e:
                     pass
 
-        # Sort by score (descending)
-        test_results.sort(key=lambda x: x["final_score"], reverse=True)
+        # Sort by score (descending), then by latency (ascending)
+        test_results.sort(key=lambda x: (
+            -x["final_score"],
+            x["avg_tls_latency"] if x["avg_tls_latency"] > 0 else 9999
+        ))
         
-        # Print detailed reports
-        passed_count = 0
-        failed_count = 0
-        key_index = 0
-        
-        for result in test_results:
-            key_index += 1
-            if result["passed"]:
-                passed_count += 1
-                if verbose:
-                    print_node_report(result, key_index)
-            else:
-                failed_count += 1
-                # Only show first few failures
-                if verbose and failed_count <= 5:
-                    print_node_report(result, key_index)
-
-        if verbose:
-            print(f"\n  📊 Results: ✅ {passed_count} passed | ❌ {failed_count} failed")
-
-        # Format output for top nodes
+        # Filter only passed
         passed_results = [r for r in test_results if r["passed"]]
+        failed_results = [r for r in test_results if not r["passed"]]
+        
+        if verbose:
+            print(f"\n  📊 Results: ✅ {len(passed_results)} passed | ❌ {len(failed_results)} failed")
+            print(f"\n  🏆 Top {MAX_PER_COUNTRY} Keys for {country_code}:")
+        
+        # Print detailed reports for top keys
         top_results = passed_results[:MAX_PER_COUNTRY]
         
+        for idx, result in enumerate(top_results, 1):
+            if verbose:
+                print_node_report(result, idx, country_code, flag)
+
+        # Format output for top nodes
         formatted = []
         count = 1
         for result in top_results:
             node = result["node"]
             raw = node["raw"]
-            score = result["final_score"]
-            verdict = result["verdict"]
+            latency = result["avg_tls_latency"] if result["avg_tls_latency"] > 0 else result["avg_tcp_latency"]
             
-            # Build clean name with score indicator
-            score_tag = ""
-            if score >= 15:
-                score_tag = "★"
-            elif score >= 10:
-                score_tag = "●"
-            elif score >= 5:
-                score_tag = "○"
-            else:
-                score_tag = "·"
-            
-            latency = result["tls_latency"] if result["tls_latency"] > 0 else result["tcp_latency"]
-            latency_tag = f"{int(latency)}ms" if latency > 0 else ""
-            
-            clean_name = f"{flag} {country_code}-{count} {score_tag} {latency_tag}".strip()
+            # Clean name format: 🇸🇬 SG 1, 🇯🇵 JP 1, etc
+            clean_name = f"{flag} {country_code} {count}"
 
             if node["type"] == "vmess":
                 data = node["data"]
@@ -754,7 +671,7 @@ def fetch_and_process_country(country_code, config, verbose=True):
                 
             count += 1
 
-        return formatted, passed_count, failed_count
+        return formatted, len(passed_results), len(failed_results)
 
     except Exception as e:
         print(f"  ❌ Error processing {country_code}: {e}")
@@ -767,13 +684,14 @@ def fetch_and_process_country(country_code, config, verbose=True):
 
 def main():
     print("=" * 70)
-    print("  🔑 Myanmar GFW-Bypass Key Checker v2.0")
+    print("  🔑 Myanmar GFW-Bypass Key Checker v3.0")
     print("  📅 Date:", datetime.now(pytz.timezone("Asia/Yangon")).strftime("%Y-%m-%d %H:%M:%S MMT"))
-    print("  🎯 Port 443 + GFW Bypass Optimized")
+    print("  🎯 Port 443 + GFW Bypass + Multiple Ping Tests")
+    print("  🇲🇲 Optimized for Myanmar Network")
     print("=" * 70)
     print(f"\n  ✅ Allowed Ports: {sorted(ALLOWED_PORTS)}")
     print(f"  ⭐ Priority Ports: {sorted(PRIORITY_PORTS)}")
-    print(f"  🚫 Blocked SNIs: {BLOCKED_SNIS}")
+    print(f"  🔄 Ping Tests: {PING_TESTS}x per key")
     print(f"  📦 Supported: {', '.join(SUPPORTED_PROTOCOLS)}")
     
     all_nodes = []
@@ -799,7 +717,7 @@ def main():
     tz = pytz.timezone("Asia/Yangon")
     current_date = datetime.now(tz).strftime("%d-%b-%y")
     
-    profile_title = f"#profile-title: {current_date} GFW-Optimized Updated"
+    profile_title = f"#profile-title: {current_date} Myanmar-Optimized"
     plain_content = profile_title + "\n" + "\n".join(all_nodes)
     
     encoded_content = base64.b64encode(plain_content.encode("utf-8")).decode("utf-8")
@@ -807,13 +725,12 @@ def main():
     with open("servers", "w", encoding="utf-8") as f:
         f.write(encoded_content)
     
-    # Also save plain text version for easy review
     with open("servers_plain.txt", "w", encoding="utf-8") as f:
         f.write(plain_content)
     
     print(f"\n  💾 Encoded output: servers")
     print(f"  📄 Plain text output: servers_plain.txt")
-    print(f"\n  ✅ Done! GFW-optimized keys with Port 443 support.")
+    print(f"\n  ✅ Done! Myanmar-optimized keys with strict testing.")
     print(f"{'='*70}")
 
 
