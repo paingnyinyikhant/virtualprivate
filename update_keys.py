@@ -25,15 +25,16 @@ SOURCES = {
 
 MAX_PER_COUNTRY = 20
 
-# 🎯 ဦးစားပေးစစ်ထုတ်မည့် Port များ
+# 🎯 ဦးစားပေးစစ်ထုတ်မည့် Port များ (443 ကို လုံးဝပယ်ထားသည်)
 PRIORITY_PORTS = {2096, 8388}
-ALLOWED_PORTS = {2096, 8388, 443, 8443, 2053, 2083, 2087}
+ALLOWED_PORTS = {2096, 8388, 8443, 2053, 2083, 2087}
+
 BLOCKED_SNIS = ["cloudflare.com", "speedtest.net", "co.uk", "127.0.0.1"]
 SUPPORTED_PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")
 
 
 def strict_myanmar_real_ping(host, port, path="/", sni=None):
-    """ Fast Ping Test with Strict 1.0s Timeout """
+    """ Fast Ping Test with Strict Timeout (No Port 443) """
     try:
         port = int(port)
         if port not in ALLOWED_PORTS:
@@ -44,12 +45,11 @@ def strict_myanmar_real_ping(host, port, path="/", sni=None):
 
         target_sni = sni if sni else host
 
-        # Socket Timeout ကို 1 စက္ကန့် သို့ လျှော့ချထားသည် (Stuck မဖြစ်စေရန်)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(1.0)
         sock.connect((host, port))
 
-        if port in {2096, 443, 8443, 2053, 2083, 2087} or sni:
+        if port in {2096, 8443, 2053, 2083, 2087} or sni:
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
@@ -128,7 +128,6 @@ def parse_and_extract(line):
 
 
 def test_node(node_info):
-    """ Single Worker for Threading """
     host = node_info["host"]
     port = node_info["port"]
     sni = node_info["sni"]
@@ -160,7 +159,6 @@ def fetch_and_process_country(country_code, config):
                 if info:
                     nodes_to_test.append(info)
 
-        # 💡 Multi-threading ဖြင့် တစ်ပြိုင်နက် Ping စစ်မည် (Fast Execution)
         valid_nodes = []
         with ThreadPoolExecutor(max_workers=30) as executor:
             results = executor.map(test_node, nodes_to_test)
@@ -168,24 +166,27 @@ def fetch_and_process_country(country_code, config):
                 if r:
                     valid_nodes.append(r)
 
-        # Priority Sorting (Port 2096/8388)
+        # 🎯 Priority Sorting (Port 2096 & 8388 ရှေ့ဆုံးမှ အရင်ယူမည်)
         priority_nodes = [n for n in valid_nodes if n["port"] in PRIORITY_PORTS]
         normal_nodes = [n for n in valid_nodes if n["port"] not in PRIORITY_PORTS]
 
         combined = (priority_nodes + normal_nodes)[:MAX_PER_COUNTRY]
 
+        # 🏷️ Clean Naming Format: 🇸🇬 SG 1, 🇸🇬 SG 2 (Port နံပါတ်များ လုံးဝမပါပါ)
         formatted = []
         count = 1
         for item in combined:
             raw = item["raw"]
+            clean_name = f"{flag} {country_code} {count}"
+            
             if item["type"] == "vmess":
                 data = item["data"]
-                data["ps"] = f"{flag} {country_code} {count} (P-{item['port']})"
+                data["ps"] = clean_name
                 new_b64 = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
                 formatted.append(f"vmess://{new_b64}")
             else:
                 base_url = raw.split("#")[0]
-                new_name = urllib.parse.quote(f"{flag} {country_code} {count} (P-{item['port']})")
+                new_name = urllib.parse.quote(clean_name)
                 formatted.append(f"{base_url}#{new_name}")
             count += 1
 
@@ -199,7 +200,7 @@ def fetch_and_process_country(country_code, config):
 def main():
     all_nodes = []
     for country_code, config in SOURCES.items():
-        print(f"Fast Testing for {country_code}...")
+        print(f"Testing nodes for {country_code}...")
         nodes = fetch_and_process_country(country_code, config)
         all_nodes.extend(nodes)
         print(f"Saved for {country_code}: {len(nodes)} nodes")
@@ -215,7 +216,7 @@ def main():
     with open("servers", "w", encoding="utf-8") as f:
         f.write(encoded_content)
 
-    print(f"Done! Fast script execution completed with {len(all_nodes)} nodes.")
+    print(f"Done! Updated 'servers' with {len(all_nodes)} nodes.")
 
 
 if __name__ == "__main__":
