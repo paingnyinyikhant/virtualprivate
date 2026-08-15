@@ -1,4 +1,5 @@
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import json
 import socket
@@ -24,66 +25,57 @@ SOURCES = {
 
 MAX_PER_COUNTRY = 20
 
-# 🎯 ဦးစားပေးစစ်ထုတ်မည့် Port များ (Port 2096 နှင့် 8388 ကို ထိပ်ဆုံးမှထားသည်)
+# 🎯 ဦးစားပေးစစ်ထုတ်မည့် Port များ
 PRIORITY_PORTS = {2096, 8388}
 ALLOWED_PORTS = {2096, 8388, 443, 8443, 2053, 2083, 2087}
-
 BLOCKED_SNIS = ["cloudflare.com", "speedtest.net", "co.uk", "127.0.0.1"]
 SUPPORTED_PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")
 
 
-def strict_myanmar_real_ping(host, port, path="/", sni=None, timeout=2.5):
-    """ Happ App & ChatGPT/Gemini အတွက် Real Data Packet Test """
+def strict_myanmar_real_ping(host, port, path="/", sni=None):
+    """ Fast Ping Test with Strict 1.0s Timeout """
     try:
         port = int(port)
         if port not in ALLOWED_PORTS:
             return False
 
-        if sni:
-            sni_lower = sni.lower()
-            if any(b_sni in sni_lower for b_sni in BLOCKED_SNIS):
-                return False
+        if sni and any(b_sni in sni.lower() for b_sni in BLOCKED_SNIS):
+            return False
 
         target_sni = sni if sni else host
 
-        # TLS Probe Test for Port 2096, 443, etc.
+        # Socket Timeout ကို 1 စက္ကန့် သို့ လျှော့ချထားသည် (Stuck မဖြစ်စေရန်)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1.0)
+        sock.connect((host, port))
+
         if port in {2096, 443, 8443, 2053, 2083, 2087} or sni:
-            sock = socket.create_connection((host, port), timeout=timeout)
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
 
             with context.wrap_socket(sock, server_hostname=target_sni) as tls_sock:
-                tls_sock.settimeout(timeout)
+                tls_sock.settimeout(1.0)
                 clean_path = path if path.startswith("/") else "/" + path
                 request = (
                     f"GET {clean_path} HTTP/1.1\r\n"
                     f"Host: {target_sni}\r\n"
-                    f"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"
-                    f"Upgrade: websocket\r\n"
-                    f"Connection: Upgrade\r\n"
-                    f"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-                    f"Sec-WebSocket-Version: 13\r\n\r\n"
+                    f"User-Agent: Mozilla/5.0\r\n"
+                    f"Connection: close\r\n\r\n"
                 )
                 tls_sock.sendall(request.encode("utf-8"))
-                response = tls_sock.recv(256)
-
-                if response and (b"101" in response or b"Sec-WebSocket-Accept" in response or b"HTTP/1.1 200" in response):
-                    return True
+                response = tls_sock.recv(128)
+                tls_sock.close()
+                return len(response) > 0
         else:
-            # TCP Direct Test for Port 8388 (Shadowsocks)
-            sock = socket.create_connection((host, port), timeout=timeout)
             sock.close()
             return True
 
     except Exception:
         return False
 
-    return False
-
 
 def parse_and_extract(line):
-    """ Host, Port, Path, SNI တို့ကို Parse လုပ်ယူခြင်း """
     try:
         if line.startswith("vmess://"):
             b64_str = line.replace("vmess://", "")
@@ -98,7 +90,6 @@ def parse_and_extract(line):
                 "path": decoded.get("path", "/"),
                 "raw": line
             }
-
         elif any(line.startswith(p) for p in ["vless://", "trojan://", "hysteria2://", "hy2://", "tuic://"]):
             parsed = urllib.parse.urlparse(line)
             query_params = urllib.parse.parse_qs(parsed.query)
@@ -110,13 +101,11 @@ def parse_and_extract(line):
                 "path": query_params.get("path", ["/"])[0],
                 "raw": line
             }
-
         elif line.startswith("ss://"):
             base_url = line.split("#")[0]
             parsed = urllib.parse.urlparse(base_url)
             host = parsed.hostname
             port = parsed.port
-
             if not host or not port:
                 raw_ss = base_url.replace("ss://", "")
                 if "@" in raw_ss:
@@ -125,7 +114,6 @@ def parse_and_extract(line):
                     decoded_ss = base64.b64decode(raw_ss + "==").decode("utf-8")
                     user_info, host_port = decoded_ss.split("@", 1)
                 host, port = host_port.split(":", 1)
-
             return {
                 "type": "ss",
                 "host": host,
@@ -139,81 +127,79 @@ def parse_and_extract(line):
     return None
 
 
+def test_node(node_info):
+    """ Single Worker for Threading """
+    host = node_info["host"]
+    port = node_info["port"]
+    sni = node_info["sni"]
+    path = node_info["path"]
+
+    if host and port and strict_myanmar_real_ping(host, port, path=path, sni=sni):
+        return node_info
+    return None
+
+
 def fetch_and_process_country(country_code, config):
     url = config["url"]
     flag = config["flag"]
-    
-    priority_nodes = []
-    normal_nodes = []
 
     try:
-        res = requests.get(url, timeout=12)
+        res = requests.get(url, timeout=10)
         content = res.text.strip()
-
         try:
             decoded = base64.b64decode(content).decode("utf-8")
             lines = decoded.splitlines()
         except Exception:
             lines = content.splitlines()
 
+        nodes_to_test = []
         for line in lines:
             line = line.strip()
-            if not line or not any(line.startswith(p) for p in SUPPORTED_PROTOCOLS):
-                continue
+            if line and any(line.startswith(p) for p in SUPPORTED_PROTOCOLS):
+                info = parse_and_extract(line)
+                if info:
+                    nodes_to_test.append(info)
 
-            node_info = parse_and_extract(line)
-            if not node_info:
-                continue
+        # 💡 Multi-threading ဖြင့် တစ်ပြိုင်နက် Ping စစ်မည် (Fast Execution)
+        valid_nodes = []
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            results = executor.map(test_node, nodes_to_test)
+            for r in results:
+                if r:
+                    valid_nodes.append(r)
 
-            host = node_info["host"]
-            port = node_info["port"]
-            sni = node_info["sni"]
-            path = node_info["path"]
+        # Priority Sorting (Port 2096/8388)
+        priority_nodes = [n for n in valid_nodes if n["port"] in PRIORITY_PORTS]
+        normal_nodes = [n for n in valid_nodes if n["port"] not in PRIORITY_PORTS]
 
-            # Connection Ping Test
-            if host and port and strict_myanmar_real_ping(host, port, path=path, sni=sni):
-                # 🎯 Port 2096 နှင့် 8388 များကို Priority List သို့ ထည့်မည်
-                if port in PRIORITY_PORTS:
-                    priority_nodes.append(node_info)
-                else:
-                    normal_nodes.append(node_info)
+        combined = (priority_nodes + normal_nodes)[:MAX_PER_COUNTRY]
 
-        # Priority Port များကို ရှေ့ဆုံးမှ အရင်ယူမည်
-        combined_nodes = priority_nodes + normal_nodes
-        final_selected = combined_nodes[:MAX_PER_COUNTRY]
-
-        # Rename Nodes
-        formatted_nodes = []
+        formatted = []
         count = 1
-        for item in final_selected:
-            n_type = item["type"]
+        for item in combined:
             raw = item["raw"]
-            
-            if n_type == "vmess":
+            if item["type"] == "vmess":
                 data = item["data"]
                 data["ps"] = f"{flag} {country_code} {count} (P-{item['port']})"
                 new_b64 = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
-                formatted_nodes.append(f"vmess://{new_b64}")
+                formatted.append(f"vmess://{new_b64}")
             else:
                 base_url = raw.split("#")[0]
                 new_name = urllib.parse.quote(f"{flag} {country_code} {count} (P-{item['port']})")
-                formatted_nodes.append(f"{base_url}#{new_name}")
-            
+                formatted.append(f"{base_url}#{new_name}")
             count += 1
 
-        return formatted_nodes
+        return formatted
 
     except Exception as e:
-        print(f"Error processing {country_code}: {e}")
-
-    return []
+        print(f"Error: {e}")
+        return []
 
 
 def main():
     all_nodes = []
-
     for country_code, config in SOURCES.items():
-        print(f"Extracting Ports 2096 & 8388 for {country_code}...")
+        print(f"Fast Testing for {country_code}...")
         nodes = fetch_and_process_country(country_code, config)
         all_nodes.extend(nodes)
         print(f"Saved for {country_code}: {len(nodes)} nodes")
@@ -221,16 +207,15 @@ def main():
     tz = pytz.timezone("Asia/Yangon")
     current_date = datetime.now(tz).strftime("%d-%b-%y")
 
-    profile_title = f"#profile-title: {current_date} Updated (Port 2096/8388 Focused)\n"
+    profile_title = f"#profile-title: {current_date} Updated\n"
     plain_content = profile_title + "\n".join(all_nodes)
 
-    encoded_bytes = base64.b64encode(plain_content.encode("utf-8"))
-    encoded_content = encoded_bytes.decode("utf-8")
+    encoded_content = base64.b64encode(plain_content.encode("utf-8")).decode("utf-8")
 
     with open("servers", "w", encoding="utf-8") as f:
         f.write(encoded_content)
 
-    print(f"Done! Created 'servers' file with {len(all_nodes)} high-performance nodes.")
+    print(f"Done! Fast script execution completed with {len(all_nodes)} nodes.")
 
 
 if __name__ == "__main__":
