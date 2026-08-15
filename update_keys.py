@@ -220,9 +220,9 @@ def main():
         print(f"Saved for {country_code}: {len(nodes)} nodes")
 
     tz = pytz.timezone("Asia/Yangon")
-    current_date = datetime.now(tz).strftime("%d-%b-%y")
+    current_time = datetime.now(tz).strftime("%I:%M %p").lstrip("0")
 
-    profile_title = f"#profile-title: {current_date} Updated\n"
+    profile_title = f"#profile-title: {current_time} Updated\n"
     plain_content = profile_title + "\n".join(all_nodes)
 
     encoded_content = base64.b64encode(plain_content.encode("utf-8")).decode("utf-8")
