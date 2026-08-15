@@ -1,55 +1,90 @@
 #!/usr/bin/env python3
 """
-SG-only Checker - Working Pattern Analysis Based
-=================================================
-Working patterns identified from user's configs:
-
-Pattern A: VLESS Reality + XTLS Vision + fp=chrome (Score: 30+)
-  → security=reality, flow=xtls-rprx-vision, fp=chrome
-  → SNI: legitimate domains (zoom.us, apple.com, etc.)
-  → Port: any (443, 12972, etc.)
-
-Pattern B: Trojan TLS + fp=chrome (Score: 25+)
-  → trojan://, security=tls, fp=chrome
-  → SNI matches host (rooster465.autos family)
-  → Port: 443
-
-Pattern C: VLESS WS+TLS (Score: 20+)
-  → security=tls, type=ws, sni=...
-  → Port: 2096, 443
-
-Pattern D: VLESS TLS + fp spoofing (Score: 18+)
-  → security=tls, fp=chrome/firefox
-  → Port: 443
+SG - Verified Working Servers Only
+===================================
+User confirmed only these 6 configs work. We filter the source
+to ONLY include configs from these proven working servers.
 """
-import base64, json, socket, ssl, time, random, sys, re
-import urllib.parse
+import base64, json, socket, ssl, time, random
+import urllib.parse, ipaddress
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import pytz, requests
 
 SOURCE = "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/sg/all.txt"
-MAX = 20
-PROTOS = ("vless://", "ss://")  # VLESS နဲ့ SS ပဲ ယူမယ်
 FB = "block_domains=an.facebook.com,graph.facebook.com/adnw,pixel.facebook.com,connect.facebook.net/adnw"
 
-# Known working SNI domains (from user's configs)
-GOOD_SNI_DOMAINS = [
-    "zoom.us", "apple.com", "rooster465.autos", "techsonic.dev",
-    "csmaster.ggff.net", "ariyuz.org", "sahanwickramasinghevip.shop"
+# ✅ User confirmed WORKING servers (IPs and domains)
+WORKING_HOSTS = {
+    "178.128.52.52",     # VLESS Reality zoom.us
+    "3.0.111.82",        # VLESS Reality apple.com
+    "45.8.211.57",       # VLESS WS+TLS ariyuz.org
+    "91.193.58.140",     # VLESS WS+TLS techsonic.dev
+    "91.193.58.57",      # VLESS WS+TLS techsonic.dev
+    "64.176.36.17",      # VLESS WS+TLS csmaster.ggff.net
+}
+
+# ❌ Known NON-working (user tested and failed)
+BLOCKED_HOSTS = {
+    "178.128.112.70",    # Reality but doesn't work from Myanmar
+    "91.192.81.214",     # Reality but doesn't work
+    "152.42.217.27",     # Reality but doesn't work
+}
+
+# Cloudflare CDN IP ranges (proxy behind these usually doesn't work)
+CF_RANGES = [
+    ipaddress.ip_network("104.16.0.0/12"),
+    ipaddress.ip_network("172.64.0.0/13"),
+    ipaddress.ip_network("162.158.0.0/15"),
+    ipaddress.ip_network("198.41.128.0/17"),
+    ipaddress.ip_network("104.20.0.0/14"),
+    ipaddress.ip_network("104.24.0.0/14"),
+    ipaddress.ip_network("173.245.48.0/20"),
+    ipaddress.ip_network("141.101.64.0/18"),
+    ipaddress.ip_network("190.93.240.0/20"),
+    ipaddress.ip_network("108.162.192.0/18"),
+    ipaddress.ip_network("197.234.240.0/22"),
+    ipaddress.ip_network("131.0.72.0/22"),
 ]
 
-# Known BAD SNIs
-BAD_SNIS = ["cloudflare.com", "speedtest.net", "127.0.0.1", "localhost", "example.com", "0.0.0.0"]
+def is_cloudflare(ip_str):
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        return any(ip in net for net in CF_RANGES)
+    except:
+        return False
 
+def resolve(host):
+    try:
+        return socket.getaddrinfo(host, None, socket.AF_INET)[0][4][0]
+    except:
+        return None
 
-def analyze_and_score(line):
-    """Parse config and score based on working patterns"""
-    d = {"raw": line, "protocol": "?", "host": None, "port": None, "type": None,
+def tcp_test(host, port, timeout=3.0):
+    try:
+        s = socket.socket(); s.settimeout(timeout)
+        t = time.time(); s.connect((host, port))
+        lat = (time.time() - t) * 1000; s.close()
+        return True, round(lat, 1)
+    except:
+        return False, -1
+
+def tls_test(host, port, sni=None, timeout=4.0):
+    try:
+        s = socket.socket(); s.settimeout(timeout)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+        t = time.time(); s.connect((host, port))
+        with ctx.wrap_socket(s, server_hostname=sni or host) as ts:
+            lat = (time.time() - t) * 1000; ts.close()
+            return True, round(lat, 1)
+    except:
+        return False, -1
+
+def parse_line(line):
+    d = {"protocol": "?", "host": None, "port": None, "type": None,
          "security": "none", "transport": "tcp", "flow": "none", "sni": None,
-         "fp": None, "pbk": None, "uuid": None, "path": "/",
-         "score": 0, "pattern": None, "features": [], "issues": []}
-    
+         "fp": None, "pbk": None, "uuid": None, "path": "/", "raw": line, "features": []}
     try:
         if line.startswith("vless://"):
             d["protocol"] = "vless"
@@ -65,333 +100,170 @@ def analyze_and_score(line):
                 "flow": q.get("flow", ["none"])[0],
                 "fp": q.get("fp", [None])[0],
                 "pbk": q.get("pbk", [None])[0],
-                "sid": q.get("sid", [None])[0],
             })
-            
-            # Pattern A: VLESS Reality + XTLS Vision
             if d["security"] == "reality":
-                d["score"] += 15
-                d["pattern"] = "A:VLESS-Reality"
                 d["features"].append("🛡️ REALITY")
                 if d["flow"] and "xtls-rprx-vision" in d["flow"]:
-                    d["score"] += 10
                     d["features"].append("🔥 XTLS Vision")
-                if d["pbk"]:
-                    d["score"] += 3
-                if d["fp"]:
-                    d["score"] += 2
-                    d["features"].append(f"fp={d['fp']}")
-                # Check SNI legitimacy
-                if d["sni"]:
-                    for good in GOOD_SNI_DOMAINS:
-                        if good in d["sni"].lower():
-                            d["score"] += 5
-                            d["features"].append(f"SNI:{d['sni']}")
-                            break
-            
-            # Pattern C: VLESS WS+TLS
-            elif d["security"] == "tls" and d["transport"] == "ws":
-                d["score"] += 12
-                d["pattern"] = "C:VLESS-WS-TLS"
-                d["features"].append("WS+TLS")
-                if d["fp"]:
-                    d["score"] += 3
-                if d["sni"]:
-                    d["score"] += 3
-                    d["features"].append(f"SNI:{d['sni'][:30]}")
-            
-            # Pattern D: VLESS TLS + fp
             elif d["security"] == "tls":
-                d["score"] += 8
-                d["pattern"] = "D:VLESS-TLS"
-                d["features"].append("TLS")
-                if d["fp"]:
-                    d["score"] += 5
-                    d["features"].append(f"fp={d['fp']}")
-                if d["transport"] == "tcp":
-                    d["score"] += 2
-            
-            # Fallback pattern for VLESS with no security
-            else:
-                d["score"] += 3
-                d["pattern"] = "G:VLESS-Plain"
-                d["features"].append("No TLS")
-            
-            # Check bad SNI
-            if d["sni"]:
-                for bad in BAD_SNIS:
-                    if bad in d["sni"].lower():
-                        d["score"] -= 8
-                        d["issues"].append(f"Bad SNI: {d['sni']}")
-                        break
-        
-        elif line.startswith("trojan://"):
-            d["protocol"] = "trojan"
-            p = urllib.parse.urlparse(line)
-            q = urllib.parse.parse_qs(p.query)
-            d.update({
-                "type": "url", "host": p.hostname, "port": int(p.port or 443),
-                "uuid": p.username,
-                "sni": q.get("sni", [None])[0] or q.get("host", [None])[0],
-                "path": q.get("path", ["/"])[0],
-                "security": "tls",
-                "transport": q.get("type", ["tcp"])[0],
-                "fp": q.get("fp", [None])[0],
-            })
-            
-            # Pattern B: Trojan TLS
-            d["score"] += 12
-            d["pattern"] = "B:Trojan-TLS"
-            d["features"].append("🐴 Trojan")
-            
-            if d["fp"]:
-                d["score"] += 5
-                d["features"].append(f"fp={d['fp']}")
-            
-            # Check if SNI matches known working domains
-            if d["sni"]:
-                for good in GOOD_SNI_DOMAINS:
-                    if good in d["sni"].lower():
-                        d["score"] += 8
-                        d["features"].append(f"SNI:{d['sni'][:30]}")
-                        break
-            
-            if d["transport"] == "tcp":
-                d["score"] += 2
-            
-            # Check bad SNI
-            if d["sni"]:
-                for bad in BAD_SNIS:
-                    if bad in d["sni"].lower():
-                        d["score"] -= 8
-                        d["issues"].append(f"Bad SNI")
-                        break
-        
-        elif line.startswith("vmess://"):
-            d["protocol"] = "vmess"
-            b = line[8:]
-            b += "=" * ((4 - len(b) % 4) % 4)
-            dc = json.loads(base64.b64decode(b).decode("utf-8"))
-            d.update({
-                "type": "vmess", "data": dc, "host": dc.get("add"),
-                "port": int(dc.get("port", 0)),
-                "sni": dc.get("sni") or dc.get("host"),
-                "path": dc.get("path", "/"),
-                "uuid": dc.get("id"),
-                "transport": dc.get("net", "tcp"),
-                "security": dc.get("tls", "none"),
-            })
-            if dc.get("tls") == "tls": d["score"] += 8
-            if dc.get("net") == "ws": d["score"] += 5
-            if dc.get("net") == "grpc": d["score"] += 7
-            d["score"] += 3
-            d["pattern"] = "E:VMess"
-        
+                if d["transport"] == "ws":
+                    d["features"].append("WS+TLS")
+                else:
+                    d["features"].append("TLS")
+            if d["fp"]: d["features"].append(f"fp={d['fp']}")
+            if d["sni"]: d["features"].append(f"SNI:{d['sni'][:25]}")
         elif line.startswith("ss://"):
             d["protocol"] = "ss"
-            bu = line.split("#")[0]
-            p = urllib.parse.urlparse(bu)
+            bu = line.split("#")[0]; p = urllib.parse.urlparse(bu)
             h, pt = p.hostname, p.port
             if not h or not pt:
                 raw = bu[5:]
-                if "@" in raw:
-                    _, hp = raw.split("@", 1)
+                if "@" in raw: _, hp = raw.split("@", 1)
                 else:
                     try:
                         dc = base64.b64decode(raw + "==").decode()
                         _, hp = dc.split("@", 1)
-                    except:
-                        return None
-                if ":" in hp:
-                    h, pt = hp.rsplit(":", 1)
-                    pt = int(pt)
+                    except: return None
+                if ":" in hp: h, pt = hp.rsplit(":", 1); pt = int(pt)
             if not h or not pt: return None
             d.update({"type": "ss", "host": h, "port": int(pt), "security": "ss"})
-            d["score"] += 5
-            d["pattern"] = "F:SS"
+            d["features"].append("Shadowsocks")
         else:
             return None
     except:
         return None
-    
-    if not d.get("host") or not d.get("port"):
-        return None
-    if not d.get("pattern"):
-        d["pattern"] = f"X:{d['protocol'].upper()}"
-    return d
+    return d if d.get("host") and d.get("port") else None
 
-
-def tcp_test(host, port, timeout=3.0):
-    try:
-        s = socket.socket()
-        s.settimeout(timeout)
-        t = time.time()
-        s.connect((host, port))
-        lat = (time.time() - t) * 1000
-        s.close()
-        return True, round(lat, 1)
-    except:
-        return False, -1
-
-
-def tls_test(host, port, sni=None, timeout=4.0):
-    try:
-        s = socket.socket()
-        s.settimeout(timeout)
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        t = time.time()
-        s.connect((host, port))
-        with ctx.wrap_socket(s, server_hostname=sni or host) as ts:
-            lat = (time.time() - t) * 1000
-            proto = ts.version()
-            ts.close()
-            return True, round(lat, 1), proto
-    except Exception as e:
-        return False, -1, str(e)[:60]
-
-
-def test_config(d):
-    """Test a config - 2x TCP + TLS with strict validation"""
+def strict_test(d):
+    """3x TCP + 2x TLS strict test"""
     h, pt = d["host"], d["port"]
     sni = d.get("sni")
-    
-    # Test 1: TCP
-    ok1, tcp_lat1 = tcp_test(h, pt)
-    if not ok1:
-        return None
-    
-    # Test 2: TCP again (stability check)
-    time.sleep(0.1)
-    ok2, tcp_lat2 = tcp_test(h, pt)
-    if not ok2:
-        return None  # Unstable - reject
-    
-    # TLS test for TLS-based protocols
-    need_tls = d["security"] in ("tls", "reality") or d["protocol"] == "trojan"
-    tls_lat = -1
-    tls_proto = None
-    
-    if need_tls:
-        tok, tlat, tproto = tls_test(h, pt, sni)
-        if not tok:
-            return None
-        tls_lat = tlat
-        tls_proto = tproto
-        
-        # Second TLS test for stability
-        time.sleep(0.1)
-        tok2, tlat2, _ = tls_test(h, pt, sni)
-        if not tok2:
-            return None  # TLS unstable - reject
-        tls_lat = round((tlat + tlat2) / 2, 1)
-    
-    avg_tcp = round((tcp_lat1 + tcp_lat2) / 2, 1)
-    avg = tls_lat if tls_lat > 0 else avg_tcp
-    
-    # Reject very high latency (probably won't work well)
-    if avg > 2000:
-        return None
-    
-    # Latency scoring (stricter)
-    if 0 < avg < 50: d["score"] += 10
-    elif 0 < avg < 100: d["score"] += 8
-    elif 0 < avg < 200: d["score"] += 5
-    elif 0 < avg < 400: d["score"] += 3
-    elif 0 < avg < 600: d["score"] += 1
-    elif avg > 1000: d["score"] -= 8
-    
-    # Port bonus
-    if pt == 443: d["score"] += 5
-    
-    # Stability bonus (both tests passed)
-    d["score"] += 5
-    
-    if tls_proto and isinstance(tls_proto, str) and "TLSv1.3" in tls_proto:
-        d["features"].append("TLSv1.3")
-    
-    return {
-        "d": d, "tcp": avg_tcp, "tls": tls_lat,
-        "score": d["score"],
-        "verdict": "🟢" if d["score"] >= 25 else "🟡" if d["score"] >= 15 else "🟠" if d["score"] >= 8 else "🔴"
-    }
+    need_tls = d["security"] in ("tls", "reality")
 
+    tcp_lats = []
+    for i in range(3):
+        if i > 0: time.sleep(0.1)
+        ok, lat = tcp_test(h, pt)
+        if not ok: return None
+        tcp_lats.append(lat)
+
+    tls_lat = -1
+    if need_tls:
+        tls_lats = []
+        for i in range(2):
+            if i > 0: time.sleep(0.1)
+            ok, lat = tls_test(h, pt, sni)
+            if not ok: return None
+            tls_lats.append(lat)
+        tls_lat = round(sum(tls_lats) / len(tls_lats), 1)
+
+    avg_tcp = round(sum(tcp_lats) / len(tcp_lats), 1)
+    avg = tls_lat if tls_lat > 0 else avg_tcp
+
+    return {"d": d, "tcp": avg_tcp, "tls": tls_lat, "avg": avg}
 
 def format_config(d, name):
     raw = d["raw"]
-    if d["type"] == "vmess":
-        dc = d["data"]
-        dc["ps"] = name
-        dc["fb_block"] = FB
-        return f"vmess://{base64.b64encode(json.dumps(dc).encode()).decode()}"
-    else:
-        base = raw.split("#")[0]
-        delim = "&" if "?" in base else "?"
-        return f"{base}{delim}{FB}#{urllib.parse.quote(name)}"
-
+    base = raw.split("#")[0]
+    delim = "&" if "?" in base else "?"
+    return f"{base}{delim}{FB}#{urllib.parse.quote(name)}"
 
 def main():
     tz = pytz.timezone("Asia/Yangon")
     now = datetime.now(tz)
     t0 = time.time()
-    
+
     print("=" * 65)
-    print(f"  🔑 SG Pattern-Based Checker | {now.strftime('%H:%M:%S MMT')}")
-    print(f"  📥 Source: {SOURCE[:60]}...")
+    print(f"  🔑 SG Verified Servers Only | {now.strftime('%H:%M:%S MMT')}")
+    print(f"  ✅ Working hosts: {len(WORKING_HOSTS)}")
+    print(f"  ❌ Blocked hosts: {len(BLOCKED_HOSTS)}")
     print("=" * 65)
-    
-    # Step 1: Fetch
-    print(f"\n  📥 Fetching...")
+
+    # Fetch
+    r = requests.get(SOURCE, timeout=15)
+    content = r.text.strip()
     try:
-        r = requests.get(SOURCE, timeout=15)
-        content = r.text.strip()
-        try:
-            lines = base64.b64decode(content).decode().splitlines()
-        except:
-            lines = content.splitlines()
-    except Exception as e:
-        print(f"  ❌ Fetch failed: {e}")
-        return
-    
-    # Step 2: Parse and score
-    configs = []
+        lines = base64.b64decode(content).decode().splitlines()
+    except:
+        lines = content.splitlines()
+
+    # Parse ALL lines (vless + ss only)
+    all_configs = []
     seen = set()
-    proto_counts = {}
-    pattern_counts = {}
-    
     for l in lines:
         l = l.strip()
-        if l and any(l.startswith(p) for p in PROTOS):
-            d = analyze_and_score(l)
+        if l and (l.startswith("vless://") or l.startswith("ss://")):
+            d = parse_line(l)
             if d:
                 key = f"{d['host']}:{d['port']}:{d.get('uuid', '')}"
                 if key not in seen:
                     seen.add(key)
-                    configs.append(d)
-                    proto_counts[d["protocol"]] = proto_counts.get(d["protocol"], 0) + 1
-                    pat = d.get("pattern", "?")
-                    pattern_counts[pat] = pattern_counts.get(pat, 0) + 1
-    
-    print(f"  📊 Total: {len(configs)} configs (deduped from {len(lines)} lines)")
-    print(f"\n  📦 Protocols:")
-    for p, c in sorted(proto_counts.items(), key=lambda x: -x[1]):
-        print(f"     {p.upper():10} {c}")
-    
-    print(f"\n  🎯 Patterns detected:")
-    for p, c in sorted(pattern_counts.items(), key=lambda x: -x[1]):
-        print(f"     {str(p):25} {c}")
-    
-    # Step 3: Pre-sort by score (test highest scored first)
-    configs.sort(key=lambda x: -x["score"])
-    
-    # Step 4: Test (only test configs with score > 5 to save time)
-    testable = [c for c in configs if c["score"] > 5]
-    print(f"\n  🧪 Testing {len(testable)} configs...")
-    
+                    all_configs.append(d)
+
+    print(f"\n  📊 Total VLESS+SS: {len(all_configs)}")
+
+    # Resolve all hosts to IPs
+    hosts = list(set(c["host"] for c in all_configs))
+    print(f"  📡 Resolving {len(hosts)} hosts...")
+    host_ip = {}
+    with ThreadPoolExecutor(max_workers=50) as ex:
+        futs = {ex.submit(resolve, h): h for h in hosts}
+        for f in as_completed(futs):
+            try: host_ip[futs[f]] = f.result()
+            except: pass
+
+    # Categorize each config
+    verified = []    # From known working hosts
+    promising = []   # Not CF, not blocked, VLESS Reality/WS+TLS
+    skipped_cf = 0
+    skipped_blocked = 0
+    skipped_other = 0
+
+    for c in all_configs:
+        h = c["host"]
+        ip = host_ip.get(h)
+
+        # Skip blocked hosts
+        if h in BLOCKED_HOSTS:
+            skipped_blocked += 1
+            continue
+
+        # Skip Cloudflare CDN IPs
+        if ip and is_cloudflare(ip):
+            skipped_cf += 1
+            continue
+
+        # Include if from verified working hosts
+        if h in WORKING_HOSTS:
+            verified.append(c)
+            continue
+
+        # Include if VLESS Reality + XTLS Vision (proven pattern, non-CF)
+        if c["protocol"] == "vless" and c["security"] == "reality" and c.get("flow") and "xtls-rprx-vision" in c["flow"]:
+            promising.append(c)
+            continue
+
+        # Include if VLESS WS+TLS with fp (non-CF)
+        if c["protocol"] == "vless" and c["security"] == "tls" and c["transport"] == "ws" and c.get("fp"):
+            promising.append(c)
+            continue
+
+        skipped_other += 1
+
+    print(f"\n  📊 Filter results:")
+    print(f"     ✅ Verified (known working hosts): {len(verified)}")
+    print(f"     🔶 Promising (non-CF, good pattern): {len(promising)}")
+    print(f"     ❌ Cloudflare CDN skipped: {skipped_cf}")
+    print(f"     ❌ Blocked hosts skipped: {skipped_blocked}")
+    print(f"     ❌ Other skipped: {skipped_other}")
+
+    # Strict test all candidates
+    candidates = verified + promising
+    print(f"\n  🧪 Strict testing {len(candidates)} configs (3x TCP + 2x TLS)...")
+
     results = []
-    with ThreadPoolExecutor(max_workers=30) as ex:
-        futs = {ex.submit(test_config, d): d for d in testable}
+    with ThreadPoolExecutor(max_workers=20) as ex:
+        futs = {ex.submit(strict_test, d): d for d in candidates}
         for f in as_completed(futs):
             try:
                 r = f.result()
@@ -399,52 +271,45 @@ def main():
                     results.append(r)
             except:
                 pass
-    
-    # Step 5: Sort by final score
-    results.sort(key=lambda x: (-x["score"], x["tls"] if x["tls"] > 0 else 9999))
-    top = results[:MAX]
-    
-    print(f"\n  ✅ Passed: {len(results)} | Saved: {len(top)}")
-    print(f"\n  {'─'*63}")
-    print(f"  {'#':>3} {'Pattern':20} {'Host':30} {'Port':>5} {'Score':>5} {'Lat':>6} Features")
-    print(f"  {'─'*63}")
-    
-    for i, r in enumerate(top, 1):
-        d = r["d"]
+
+    # Sort: verified first, then by latency
+    def sort_key(r):
+        is_verified = r["d"]["host"] in WORKING_HOSTS
         lat = r["tls"] if r["tls"] > 0 else r["tcp"]
-        ft = " | ".join(d["features"][:4]) if d["features"] else ""
-        print(f"  {i:>3} {d.get('pattern','?'):20} {str(d['host'])[:30]:30} {d['port']:>5} {r['score']:>5} {lat:>5.0f}ms {ft}")
-    
+        return (0 if is_verified else 1, lat)
+
+    results.sort(key=sort_key)
+
+    print(f"\n  ✅ Passed strict test: {len(results)}")
+    print(f"\n  {'─'*63}")
+    for i, r in enumerate(results, 1):
+        d = r["d"]
+        v = "✅" if d["host"] in WORKING_HOSTS else "🔶"
+        lat = r["tls"] if r["tls"] > 0 else r["tcp"]
+        ft = " | ".join(d["features"][:4])
+        print(f"  {v} {i:>2} | {d['protocol'].upper():6} | {str(d['host'])[:28]:28}:{d['port']} | {lat:.0f}ms | {ft}")
+
     # Save
     all_out = []
     flag = "🇸🇬"
-    for i, r in enumerate(top, 1):
+    for i, r in enumerate(results, 1):
         all_out.append(format_config(r["d"], f"{flag} SG {i}"))
-    
+
     print(f"\n{'='*65}")
-    print(f"  ⏱️ Total: {time.time()-t0:.1f}s")
-    print(f"  📊 {len(all_out)} keys saved")
-    
-    # Pattern breakdown of saved keys
-    pat_saved = {}
-    for r in top:
-        p = r["d"].get("pattern", "?")
-        pat_saved[p] = pat_saved.get(p, 0) + 1
-    print(f"\n  📊 Saved by pattern:")
-    for p, c in sorted(pat_saved.items(), key=lambda x: -x[1]):
-        print(f"     {p:25} {c}")
-    
+    print(f"  ⏱️ {time.time()-t0:.1f}s | 💾 {len(all_out)} keys saved")
+
+    v_count = sum(1 for r in results if r["d"]["host"] in WORKING_HOSTS)
+    p_count = len(results) - v_count
+    print(f"     ✅ Verified: {v_count} | 🔶 New promising: {p_count}")
     print(f"{'='*65}")
-    
+
     title = f"#profile-title: {now.strftime('%I:%M %p')} Updated"
     plain = title + "\n" + "\n".join(all_out)
     with open("servers", "w") as f:
         f.write(base64.b64encode(plain.encode()).decode())
     with open("servers_plain.txt", "w") as f:
         f.write(plain)
-    
     print(f"\n  💾 servers + servers_plain.txt | ✅ Done!")
-
 
 if __name__ == "__main__":
     main()
