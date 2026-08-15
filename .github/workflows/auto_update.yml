@@ -1,14 +1,17 @@
-name: Auto Update V2Ray Keys Every 5 Mins
+name: Auto Update V2Ray Keys Every Hour
 
 on:
   schedule:
-    # ၁၀ မိနစ်တစ်ကြိမ် Auto Run ခိုင်းခြင်း
-    - cron: '*/5 * * * *'
-  workflow_dispatch: # Manual run နိုင်ရန်
+    # 💡 ၁ နာရီတစ်ကြိမ် Auto Run ခိုင်းခြင်း (နာရီတိုင်း၏ မိနစ် 00 တွင် Run မည်)
+    - cron: '0 * * * *'
+  workflow_dispatch: # Manual run နိုင်ရန် အစားထည့်ထားခြင်း
 
 jobs:
   update-keys:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -31,5 +34,4 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add servers
-          git commit -m "Auto update servers file [skip ci]" || exit 0
-          git push
+          git diff --staged --quiet || (git commit -m "Auto update servers file [skip ci]" && git push)
