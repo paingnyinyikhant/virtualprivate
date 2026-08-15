@@ -32,9 +32,9 @@ SOURCES = {
 
 MAX_PER_COUNTRY = 20  # နိုင်ငံတစ်ခုကို Ping အကောင်းဆုံး 20
 
-# 🎯 Port 443 အပါအဝင် GFW ကျော်ရန် အကောင်းဆုံး Port များ
-PRIORITY_PORTS = {443, 2096, 8443}
-ALLOWED_PORTS = {443, 2096, 8388, 8443, 2053, 2083, 2087, 2052, 2082, 2086, 2095, 80, 8080}
+# 🎯 GFW ကျော်ရန် အကောင်းဆုံး Port များ (Port 443 မပါ)
+PRIORITY_PORTS = {2096, 8443, 8388}
+ALLOWED_PORTS = {2096, 8388, 8443, 2053, 2083, 2087, 2052, 2082, 2086, 2095, 80, 8080}
 
 # 🚫 GFW မှ ပိတ်ထားတတ်သော SNI များ
 BLOCKED_SNIS = [
@@ -423,7 +423,7 @@ def comprehensive_test(node_info):
     tls_success_count = 0
     tcp_success_count = 0
     
-    tls_ports = {443, 2096, 8443, 2053, 2083, 2087}
+    tls_ports = {2096, 8443, 2053, 2083, 2087}
     is_tls_protocol = protocol in ("vless", "trojan", "vmess", "tuic", "hysteria2")
     need_tls = port in tls_ports or is_tls_protocol
     
@@ -480,11 +480,9 @@ def comprehensive_test(node_info):
     score = node_info.get("gfw_score", 0)
     
     # Port bonus
-    if port == 443:
+    if port in PRIORITY_PORTS:
         score += 5
-        node_info["features"].append("✅ Port 443")
-    elif port in PRIORITY_PORTS:
-        score += 3
+        node_info["features"].append(f"✅ Priority Port {port}")
     
     # Latency scoring (မြန်မာအတွက် adjusted)
     latency = result["avg_tls_latency"] if result["avg_tls_latency"] > 0 else result["avg_tcp_latency"]
@@ -715,9 +713,9 @@ def main():
     
     # Save output
     tz = pytz.timezone("Asia/Yangon")
-    current_date = datetime.now(tz).strftime("%d-%b-%y")
+    current_time = datetime.now(tz).strftime("%I:%M %p")
     
-    profile_title = f"#profile-title: {current_date} Myanmar-Optimized"
+    profile_title = f"#profile-title: {current_time} Updated"
     plain_content = profile_title + "\n" + "\n".join(all_nodes)
     
     encoded_content = base64.b64encode(plain_content.encode("utf-8")).decode("utf-8")
