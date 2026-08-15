@@ -8,20 +8,15 @@ import urllib.parse
 import pytz
 import requests
 
-SOURCES = {
-    "SG": {
-        "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/sg/all.txt",
-        "flag": "🇸🇬",
-    },
-    "JP": {
-        "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/jp/all.txt",
-        "flag": "🇯🇵",
-    },
-    "TH": {
-        "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/th/all.txt",
-        "flag": "🇹🇭",
-    },
+# 🎯 Main Source Link တစ်ခုတည်းမှ စစ်ထုတ်မည့် နိုင်ငံများနှင့် Flag များ
+TARGET_COUNTRIES = {
+    "SG": {"flag": "🇸🇬", "keywords": ["sg", "singapore"]},
+    "JP": {"flag": "🇯🇵", "keywords": ["jp", "japan"]},
+    "US": {"flag": "🇺🇸", "keywords": ["us", "united states", "america"]},
+    "TH": {"flag": "🇹🇭", "keywords": ["th", "thailand"]},
 }
+
+SOURCE_URL = "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/refs/heads/main/V2Ray-Config-By-EbraSha-All-Type.txt"
 
 MAX_PER_COUNTRY = 20
 
@@ -32,7 +27,7 @@ ALLOWED_PORTS = {2096, 8388, 8443, 2053, 2083, 2087}
 BLOCKED_SNIS = ["cloudflare.com", "speedtest.net", "co.uk", "127.0.0.1"]
 SUPPORTED_PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")
 
-# 🚫 Facebook Ads သီးသန့် Domain & Rule Blocking Parameters
+# 🚫 Facebook Ads Blocking Parameters
 FB_ADS_BLOCK_PARAMS = (
     "block_domains=an.facebook.com,graph.facebook.com/adnw,"
     "pixel.facebook.com,connect.facebook.net/adnw"
@@ -87,6 +82,7 @@ def parse_and_extract(line):
             b64_str = line.replace("vmess://", "")
             b64_str += "=" * ((4 - len(b64_str) % 4) % 4)
             decoded = json.loads(base64.b64decode(b64_str).decode("utf-8"))
+            ps = str(decoded.get("ps", "")).lower()
             return {
                 "type": "vmess",
                 "data": decoded,
@@ -94,21 +90,26 @@ def parse_and_extract(line):
                 "port": int(decoded.get("port")),
                 "sni": decoded.get("sni") or decoded.get("host"),
                 "path": decoded.get("path", "/"),
+                "ps": ps,
                 "raw": line
             }
         elif any(line.startswith(p) for p in ["vless://", "trojan://", "hysteria2://", "hy2://", "tuic://"]):
             parsed = urllib.parse.urlparse(line)
             query_params = urllib.parse.parse_qs(parsed.query)
+            ps = urllib.parse.unquote(parsed.fragment).lower()
             return {
                 "type": "url",
                 "host": parsed.hostname,
                 "port": int(parsed.port or 443),
                 "sni": query_params.get("sni", [None])[0] or query_params.get("host", [None])[0],
                 "path": query_params.get("path", ["/"])[0],
+                "ps": ps,
                 "raw": line
             }
         elif line.startswith("ss://"):
-            base_url = line.split("#")[0]
+            parts = line.split("#")
+            ps = urllib.parse.unquote(parts[1]).lower() if len(parts) > 1 else ""
+            base_url = parts[0]
             parsed = urllib.parse.urlparse(base_url)
             host = parsed.hostname
             port = parsed.port
@@ -126,6 +127,7 @@ def parse_and_extract(line):
                 "port": int(port),
                 "sni": None,
                 "path": "/",
+                "ps": ps,
                 "raw": line
             }
     except Exception:
@@ -144,12 +146,21 @@ def test_node(node_info):
     return None
 
 
-def fetch_and_process_country(country_code, config):
-    url = config["url"]
-    flag = config["flag"]
+def detect_country(node_info):
+    """ Node ရဲ့ Host, SNI သို့မဟုတ် PS (Remark Name) မှ နိုင်ငံကို ခွဲခြားခြင်း """
+    search_text = f"{node_info.get('host', '')} {node_info.get('sni', '')} {node_info.get('ps', '')}".lower()
+    
+    for code, info in TARGET_COUNTRIES.items():
+        for kw in info["keywords"]:
+            if kw in search_text:
+                return code
+    return None
 
+
+def main():
+    print(f"Fetching nodes from main list...")
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(SOURCE_URL, timeout=15)
         content = res.text.strip()
         try:
             decoded = base64.b64decode(content).decode("utf-8")
@@ -157,80 +168,78 @@ def fetch_and_process_country(country_code, config):
         except Exception:
             lines = content.splitlines()
 
-        nodes_to_test = []
+        parsed_nodes = []
         for line in lines:
             line = line.strip()
             if line and any(line.startswith(p) for p in SUPPORTED_PROTOCOLS):
                 info = parse_and_extract(line)
                 if info:
-                    nodes_to_test.append(info)
+                    parsed_nodes.append(info)
 
-        valid_nodes = []
-        with ThreadPoolExecutor(max_workers=30) as executor:
-            results = executor.map(test_node, nodes_to_test)
-            for r in results:
-                if r:
-                    valid_nodes.append(r)
+        # နိုင်ငံအလိုက် Categorize ခွဲခြားခြင်း
+        categorized = {"SG": [], "JP": [], "US": [], "TH": []}
+        for node in parsed_nodes:
+            country = detect_country(node)
+            if country in categorized:
+                categorized[country].append(node)
 
-        # Priority Sorting
-        priority_nodes = [n for n in valid_nodes if n["port"] in PRIORITY_PORTS]
-        normal_nodes = [n for n in valid_nodes if n["port"] not in PRIORITY_PORTS]
-
-        combined = (priority_nodes + normal_nodes)[:MAX_PER_COUNTRY]
-
-        formatted = []
-        count = 1
-        for item in combined:
-            raw = item["raw"]
+        all_nodes = []
+        
+        # နိုင်ငံအလိုက် Node များကို စစ်ထုတ်ပြီး Ping Test လုပ်ခြင်း
+        for country_code, nodes in categorized.items():
+            print(f"Testing {len(nodes)} nodes for {country_code}...")
+            flag = TARGET_COUNTRIES[country_code]["flag"]
             
-            # Node Name များကို ပုံမှန်အတိုင်း သန့်သန့်ရှင်းရှင်း ထားရှိခြင်း
-            clean_name = f"{flag} {country_code} {count}"
+            valid_nodes = []
+            with ThreadPoolExecutor(max_workers=30) as executor:
+                results = executor.map(test_node, nodes)
+                for r in results:
+                    if r:
+                        valid_nodes.append(r)
 
-            if item["type"] == "vmess":
-                data = item["data"]
-                data["ps"] = clean_name
-                # VMess Config အတွင်း Facebook Ads Blocking Parameters သီးသန့်ထည့်ခြင်း
-                data["fb_block"] = FB_ADS_BLOCK_PARAMS
-                new_b64 = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
-                formatted.append(f"vmess://{new_b64}")
-            else:
-                base_url = raw.split("#")[0]
-                # VLESS / Trojan / SS Dynamic Parameter ထဲသို့ Facebook Ad Block Injection ပြုလုပ်ခြင်း
-                delimiter = "&" if "?" in base_url else "?"
-                base_url = f"{base_url}{delimiter}{FB_ADS_BLOCK_PARAMS}"
+            # Priority Sorting (2096, 8388 ports များကို ရှေ့တင်မည်)
+            priority_nodes = [n for n in valid_nodes if n["port"] in PRIORITY_PORTS]
+            normal_nodes = [n for n in valid_nodes if n["port"] not in PRIORITY_PORTS]
 
-                new_name = urllib.parse.quote(clean_name)
-                formatted.append(f"{base_url}#{new_name}")
-                
-            count += 1
+            combined = (priority_nodes + normal_nodes)[:MAX_PER_COUNTRY]
 
-        return formatted
+            count = 1
+            for item in combined:
+                raw = item["raw"]
+                clean_name = f"{flag} {country_code} {count}"
+
+                if item["type"] == "vmess":
+                    data = item["data"]
+                    data["ps"] = clean_name
+                    data["fb_block"] = FB_ADS_BLOCK_PARAMS
+                    new_b64 = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
+                    all_nodes.append(f"vmess://{new_b64}")
+                else:
+                    base_url = raw.split("#")[0]
+                    delimiter = "&" if "?" in base_url else "?"
+                    base_url = f"{base_url}{delimiter}{FB_ADS_BLOCK_PARAMS}"
+                    new_name = urllib.parse.quote(clean_name)
+                    all_nodes.append(f"{base_url}#{new_name}")
+                    
+                count += 1
+
+            print(f"Saved for {country_code}: {len(combined)} nodes")
+
+        tz = pytz.timezone("Asia/Yangon")
+        current_date = datetime.now(tz).strftime("%d-%b-%y")
+
+        profile_title = f"#profile-title: {current_date} Updated\n"
+        plain_content = profile_title + "\n".join(all_nodes)
+
+        encoded_content = base64.b64encode(plain_content.encode("utf-8")).decode("utf-8")
+
+        with open("servers", "w", encoding="utf-8") as f:
+            f.write(encoded_content)
+
+        print(f"Done! Successfully generated {len(all_nodes)} nodes from single URL.")
 
     except Exception as e:
-        print(f"Error: {e}")
-        return []
-
-
-def main():
-    all_nodes = []
-    for country_code, config in SOURCES.items():
-        print(f"Testing nodes for {country_code}...")
-        nodes = fetch_and_process_country(country_code, config)
-        all_nodes.extend(nodes)
-        print(f"Saved for {country_code}: {len(nodes)} nodes")
-
-    tz = pytz.timezone("Asia/Yangon")
-    current_date = datetime.now(tz).strftime("%d-%b-%y")
-
-    profile_title = f"#profile-title: {current_date} Updated\n"
-    plain_content = profile_title + "\n".join(all_nodes)
-
-    encoded_content = base64.b64encode(plain_content.encode("utf-8")).decode("utf-8")
-
-    with open("servers", "w", encoding="utf-8") as f:
-        f.write(encoded_content)
-
-    print(f"Done! Updated nodes with clean names and targeted Facebook Ad Block rules.")
+        print(f"Error processing main URL: {e}")
 
 
 if __name__ == "__main__":
