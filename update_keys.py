@@ -17,10 +17,6 @@ SOURCES = {
         "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/jp/all.txt",
         "flag": "🇯🇵",
     },
-    "TH": {
-        "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/th/all.txt",
-        "flag": "🇹🇭",
-    },
 }
 
 # 🎯 တစ်နိုင်ငံလျှင် Server 20 ခု (Wifi 10 ခု + Sim 10 ခု)
@@ -30,16 +26,10 @@ SIM_SLOTS = 10   # ကျန် Port များ (For Sim Data and Wifi)
 # 🎯 Sim Data + Wifi အဖွဲ့အတွင်း ဦးစားပေးစစ်ထုတ်မည့် Port များ
 PRIORITY_PORTS = {2096, 8388}
 # Port 443 (Wifi) အပါအဝင် စစ်ထုတ်ခွင့်ပြုထားသော Port အားလုံး
-ALLOWED_PORTS = {443, 2096, 8388, 8443, 2053, 2083, 2087}
+ALLOWED_PORTS = {443, 2096, 8388, 8443, 2053}
 
 BLOCKED_SNIS = ["cloudflare.com", "speedtest.net", "co.uk", "127.0.0.1"]
 SUPPORTED_PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")
-
-# 🚫 Facebook Ads သီးသန့် Domain & Rule Blocking Parameters
-FB_ADS_BLOCK_PARAMS = (
-    "block_domains=an.facebook.com,graph.facebook.com/adnw,"
-    "pixel.facebook.com,connect.facebook.net/adnw"
-)
 
 
 def strict_myanmar_real_ping(host, port, path="/", sni=None):
@@ -58,7 +48,7 @@ def strict_myanmar_real_ping(host, port, path="/", sni=None):
         sock.settimeout(1.0)
         sock.connect((host, port))
 
-        if port in {2096, 8443, 2053, 2083, 2087} or sni:
+        if port in {443, 2096, 8443, 2053} or sni:
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
@@ -203,15 +193,10 @@ def fetch_and_process_country(country_code, config):
             if item["type"] == "vmess":
                 data = item["data"]
                 data["ps"] = clean_name
-                # VMess Config အတွင်း Facebook Ads Blocking Parameters သီးသန့်ထည့်ခြင်း
-                data["fb_block"] = FB_ADS_BLOCK_PARAMS
                 new_b64 = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
                 formatted.append(f"vmess://{new_b64}")
             else:
                 base_url = raw.split("#")[0]
-                # VLESS / Trojan / SS Dynamic Parameter ထဲသို့ Facebook Ad Block Injection ပြုလုပ်ခြင်း
-                delimiter = "&" if "?" in base_url else "?"
-                base_url = f"{base_url}{delimiter}{FB_ADS_BLOCK_PARAMS}"
 
                 new_name = urllib.parse.quote(clean_name)
                 formatted.append(f"{base_url}#{new_name}")
@@ -244,7 +229,7 @@ def main():
     with open("servers", "w", encoding="utf-8") as f:
         f.write(encoded_content)
 
-    print(f"Done! Updated nodes with clean names and targeted Facebook Ad Block rules.")
+    print(f"Done! Updated nodes with clean names.")
 
 
 if __name__ == "__main__":
