@@ -286,3 +286,789 @@ def _poly1305(key, data):
 
 def _chacha20_poly1305_encrypt(key, nonce, aad, pt):
     poly_key = _chacha20_block(key, 0, nonce)[:32]
+    ct = _chacha20_xor(key, nonce, pt, counter=1)
+    aad_pad = aad + b"\x00" * ((16 - len(aad) % 16) % 16)
+    ct_pad = ct + b"\x00" * ((16 - len(ct) % 16) % 16)
+    mac = _poly1305(poly_key, aad_pad + ct_pad + (len(aad)).to_bytes(8, "little") + (len(ct)).to_bytes(8, "little"))
+    return ct, mac
+
+
+def _chacha20_poly1305_decrypt(key, nonce, aad, ct, tag):
+    poly_key = _chacha20_block(key, 0, nonce)[:32]
+    aad_pad = aad + b"\x00" * ((16 - len(aad) % 16) % 16)
+    ct_pad = ct + b"\x00" * ((16 - len(ct) % 16) % 16)
+    calc = _poly1305(poly_key, aad_pad + ct_pad + (len(aad)).to_bytes(8, "little") + (len(ct)).to_bytes(8, "little"))
+    if not hmac.compare_digest(calc, tag):
+        return None
+    return _chacha20_xor(key, nonce, ct, counter=1)
+
+
+def _evp_bytes_to_key(password, key_len):
+    d = b""
+    prev = b""
+    while len(d) < key_len:
+        prev = hashlib.md5(prev + password).digest()
+        d += prev
+    return d[:key_len]
+
+
+def _hkdf_sha1(ikm, salt, info, length=32):
+    prk = hmac.new(salt, ikm, hashlib.sha1).digest()
+    okm = b""
+    t = b""
+    i = 1
+    while len(okm) < length:
+        t = hmac.new(prk, t + info + bytes([i]), hashlib.sha1).digest()
+        okm += t
+        i += 1
+    return okm[:length]
+
+
+# Proxy မှ dial လုပ်မည့် Test Targets (Cloudflare မဟုတ်သော — VPS/DC IP မှလည်း ရနိုင်)
+RELAY_TARGETS = [
+    ("httpforever.com", 80, b"GET / HTTP/1.1\r\nHost: httpforever.com\r\n\r\n", b"httpforever"),
+    ("detectportal.firefox.com", 80, b"GET /success.txt HTTP/1.1\r\nHost: detectportal.firefox.com\r\n\r\n", b"success"),
+]
+TEST_TARGET_HOST = RELAY_TARGETS[0][0]
+TEST_TARGET_PORT = RELAY_TARGETS[0][1]
+
+# 🚫 မြန်မာနိုင်ငံတွင် အဆင်မပြေသော Cloudflare CDN IP များ (offical list)
+CLOUDFLARE_RANGES = [
+    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+    "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+    "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+    "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+]
+
+
+def _is_cloudflare_ip(host):
+    """host IP သည် Cloudflare CDN ပိုင်ဆိုင်ပါက True"""
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            ip = ipaddress.ip_address(socket.gethostbyname(host))
+        except Exception:
+            return False
+    for r in CLOUDFLARE_RANGES:
+        if ip in ipaddress.ip_network(r):
+            return True
+    return False
+
+
+def _is_domain_fronted(node_info):
+    """host IP နှင့် SNI/host_header domain ၏ resolve IP မတူပါက True
+    (CDN/domain-fronting setup — မြန်မာနိုင်ငံတွင် အဆင်မပြေတတ်)"""
+    host = node_info.get("host")
+    sni = node_info.get("sni") or node_info.get("host_header")
+    if not host or not sni:
+        return False
+    if sni == host:
+        return False
+    try:
+        host_ip = socket.gethostbyname(host)
+        sni_ip = socket.gethostbyname(sni)
+    except Exception:
+        return False
+    return host_ip != sni_ip
+
+TLS_PORTS = {443, 2096, 8443, 2053}
+
+SS_AEAD_METHODS = {"aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"}
+SS_STREAM_METHODS = {"aes-128-cfb", "aes-192-cfb", "aes-256-cfb"}
+
+
+# ---------------------------------------------------------------- socket helpers
+def _connect_tcp(host, port, timeout=2.0):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect((host, int(port)))
+    return s
+
+
+def _tls_wrap(sock, host, sni, timeout=3.0):
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    t = ctx.wrap_socket(sock, server_hostname=sni or host)
+    t.settimeout(timeout)
+    return t
+
+
+def _read_exact(sock, n, timeout=4.0):
+    sock.settimeout(timeout)
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise EOFError("closed")
+        buf += chunk
+    return buf
+
+
+def _recv_until(sock, marker=b"\r\n\r\n", maxlen=8192, timeout=4.0):
+    sock.settimeout(timeout)
+    data = b""
+    while marker not in data and len(data) < maxlen:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    return data
+
+
+def _recv_some(sock, maxlen, timeout=4.0):
+    sock.settimeout(timeout)
+    try:
+        return sock.recv(maxlen)
+    except socket.timeout:
+        return b""
+
+def _verify_relay(data, target_idx=0):
+    """proxy မှ တကယ့် data relay ဖြစ်မဖြစ် target signature ဖြင့် စစ်ဆေးခြင်း
+    (fallback/echo server များသည် ဤ content ကို ပြန်၍မရနိုင်ပါ)"""
+    if not data:
+        return False
+    return RELAY_TARGETS[target_idx][3] in data
+
+
+# ---------------------------------------------------------------- websocket helpers
+def _ws_handshake(sock, host, path, timeout=4.0):
+    key = base64.b64encode(os.urandom(16)).decode()
+    req = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n"
+    ).encode("utf-8")
+    sock.sendall(req)
+    resp = _recv_until(sock, b"\r\n\r\n", timeout=timeout)
+    return resp.startswith(b"HTTP/1.1 101")
+
+
+def _ws_send_frame(sock, payload):
+    mask = os.urandom(4)
+    hdr = bytearray([0x82])  # FIN + binary
+    n = len(payload)
+    if n < 126:
+        hdr.append(0x80 | n)
+    elif n < 65536:
+        hdr.append(0x80 | 126)
+        hdr += struct.pack(">H", n)
+    else:
+        hdr.append(0x80 | 127)
+        hdr += struct.pack(">Q", n)
+    hdr += mask
+    masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    sock.sendall(bytes(hdr) + masked)
+
+
+def _ws_read_frame(sock, timeout=5.0):
+    h = _read_exact(sock, 2, timeout)
+    masked = h[1] & 0x80
+    n = h[1] & 0x7F
+    if n == 126:
+        n = struct.unpack(">H", _read_exact(sock, 2, timeout))[0]
+    elif n == 127:
+        n = struct.unpack(">Q", _read_exact(sock, 8, timeout))[0]
+    if n > 65536:
+        return None
+    mask = _read_exact(sock, 4, timeout) if masked else None
+    payload = _read_exact(sock, n, timeout) if n else b""
+    if mask:
+        payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    return payload
+
+
+# ---------------------------------------------------------------- vless / trojan / vmess
+def _addr_only(host, domain_type):
+    """atyp + address bytes (without port)."""
+    try:
+        return b"\x01" + socket.inet_aton(host)
+    except OSError:
+        hb = host.encode("utf-8")
+        if len(hb) > 255:
+            raise ValueError("host too long")
+        return bytes([domain_type]) + bytes([len(hb)]) + hb
+
+
+def _socks_addr(host, port):
+    """Shadowsocks-style: 0x01 IPv4, 0x03 domain, 0x04 IPv6 (+port)."""
+    return _addr_only(host, 0x03) + struct.pack(">H", port)
+
+
+def _vless_header(uuid, host, port):
+    """VLESS request: version(0) uuid addons(0) cmd(1) PORT(2B) + addr (0x02=domain)."""
+    uid = uuid.replace("-", "")
+    if len(uid) != 32:
+        raise ValueError("bad uuid")
+    return bytes([0]) + bytes.fromhex(uid) + bytes([0, 1]) + struct.pack(">H", port) + _addr_only(host, 0x02)
+
+
+def _trojan_request(password, host, port):
+    """Xray/trojan-go format: hex(SHA224(pwd)) CRLF cmd(1) addr CRLF (0x03=domain)."""
+    pwd_hex = hashlib.sha224(password.encode("utf-8")).hexdigest().encode("ascii")
+    return pwd_hex + b"\r\n" + bytes([1]) + _socks_addr(host, port) + b"\r\n"
+
+
+def _check_vless(sock, info, framed, target_idx=0):
+    uuid = info.get("uuid")
+    if not uuid:
+        return False
+    th, tp, treq, _sig = RELAY_TARGETS[target_idx]
+    try:
+        # header + a real HTTP GET so the server relays a real target response
+        # (xray only flushes its 0x00 response header once data flows)
+        req = _vless_header(uuid, th, tp) + treq
+    except Exception:
+        return False
+    try:
+        if framed:
+            _ws_send_frame(sock, req)
+            deadline = time.time() + 7.0
+            while time.time() < deadline:
+                resp = _ws_read_frame(sock, timeout=min(7.0, deadline - time.time()))
+                if resp is None:
+                    return False
+                if len(resp) > 0 and resp[0] == 0:
+                    return True
+            return False
+        sock.sendall(req)
+        resp = _recv_some(sock, 4096, timeout=7.0)
+        return len(resp) > 0 and resp[0] == 0
+    except Exception:
+        return False
+
+
+def _check_trojan(sock, info, framed, target_idx=0):
+    password = info.get("password")
+    if not password:
+        return False
+    th, tp, treq, _sig = RELAY_TARGETS[target_idx]
+    # header + a real HTTP GET so the proxy relays a real target response
+    req = _trojan_request(password, th, tp) + treq
+    try:
+        if framed:
+            _ws_send_frame(sock, req)
+            deadline = time.time() + 8.0
+            data = b""
+            while time.time() < deadline:
+                resp = _ws_read_frame(sock, timeout=min(8.0, deadline - time.time()))
+                if resp is None:
+                    return False
+                data += resp
+                if _verify_relay(data, target_idx):
+                    return True
+                if len(data) > 16384:
+                    break
+            return False
+        sock.sendall(req)
+        data = _recv_until(sock, b"\r\n\r\n", maxlen=8192, timeout=8.0)
+        if not (data.startswith(b"HTTP/1.1 2") or data.startswith(b"HTTP/1.1 3")):
+            return False
+        while _sig not in data and len(data) < 16384:
+            try:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            except Exception:
+                break
+        return _verify_relay(data, target_idx)
+    except Exception:
+        return False
+
+
+def _check_vmess(sock, info, framed):
+    if framed:
+        # 101 upgrade already proves the ws proxy endpoint exists
+        return True
+    # tcp/raw: a real vmess server closes on garbage; a website replies HTTP
+    try:
+        sock.sendall(os.urandom(64))
+        resp = _recv_some(sock, 512, timeout=2.5)
+    except Exception:
+        return False
+    if not resp:
+        return True
+    return not resp.startswith(b"HTTP/")
+
+
+# ---------------------------------------------------------------- shadowsocks
+def _b64_maybe(pwd):
+    """If the password looks like base64, return the decoded bytes too."""
+    try:
+        dec = base64.b64decode(pwd, validate=True)
+        if dec and pwd.replace("=", "") and base64.b64encode(dec).decode().rstrip("=") == pwd.rstrip("="):
+            return dec
+    except Exception:
+        pass
+    return None
+
+
+def _ss_keys(method, password):
+    key_len = 16 if method == "aes-128-gcm" else 32
+    keys = [_evp_bytes_to_key(password.encode("utf-8"), key_len)]
+    dec = _b64_maybe(password)
+    if dec is not None:
+        alt = _evp_bytes_to_key(dec, key_len)
+        if alt != keys[0]:
+            keys.append(alt)
+    return keys
+
+
+def _ss_nonce(counter):
+    return counter.to_bytes(4, "little") + b"\x00" * 8
+
+
+def _ss_aead_encrypt(method, key, salt, aad, data, counter):
+    subkey = _hkdf_sha1(key, salt, b"ss-subkey", len(key))
+    nonce = _ss_nonce(counter)
+    if method == "chacha20-ietf-poly1305":
+        return _chacha20_poly1305_encrypt(subkey, nonce, aad, data)
+    return _gcm_encrypt(subkey, nonce, aad, data)
+
+
+def _ss_aead_decrypt(method, key, salt, aad, ct, tag, counter):
+    subkey = _hkdf_sha1(key, salt, b"ss-subkey", len(key))
+    nonce = _ss_nonce(counter)
+    if method == "chacha20-ietf-poly1305":
+        return _chacha20_poly1305_decrypt(subkey, nonce, aad, ct, tag)
+    return _gcm_decrypt(subkey, nonce, aad, ct, tag)
+
+
+def _ss_aead_try(method, key, host, port):
+    key_len = len(key)
+    salt_len = 16 if method == "aes-128-gcm" else 32
+    sock = _connect_tcp(host, port)
+    try:
+        client_salt = os.urandom(salt_len)
+        payload = _socks_addr(TEST_TARGET_HOST, TEST_TARGET_PORT) + (
+            f"GET / HTTP/1.1\r\nHost: {TEST_TARGET_HOST}\r\n\r\n"
+        ).encode("ascii")
+        ct1, tag1 = _ss_aead_encrypt(method, key, client_salt, b"", struct.pack(">H", len(payload)), 0)
+        ct2, tag2 = _ss_aead_encrypt(method, key, client_salt, b"", payload, 1)
+        sock.sendall(client_salt + ct1 + tag1 + ct2 + tag2)
+
+        server_salt = _read_exact(sock, salt_len, 8.0)
+        ln_ct = _read_exact(sock, 18, 8.0)
+        ln_pt = _ss_aead_decrypt(method, key, server_salt, b"", ln_ct[:2], ln_ct[2:], 0)
+        if ln_pt is None:
+            return False
+        length = struct.unpack(">H", ln_pt)[0]
+        if not (0 < length <= 0x3FFF):
+            return False
+        body = _read_exact(sock, length + 16, 8.0)
+        pt = _ss_aead_decrypt(method, key, server_salt, b"", body[:length], body[length:], 1)
+        if pt is None:
+            return False
+        return b"HTTP" in pt[:4096]
+    except Exception:
+        return False
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def _ss_stream_try(method, key, host, port):
+    iv = os.urandom(16)
+    payload = _socks_addr(TEST_TARGET_HOST, TEST_TARGET_PORT) + (
+        f"GET / HTTP/1.1\r\nHost: {TEST_TARGET_HOST}\r\n\r\n"
+    ).encode("ascii")
+    sock = _connect_tcp(host, port)
+    try:
+        sock.sendall(iv + _aes_cfb_encrypt(key, iv, payload))
+        server_iv = _read_exact(sock, 16, 8.0)
+        data = b""
+        sock.settimeout(8.0)
+        while len(data) < 4096:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+            if b"\r\n\r\n" in _aes_cfb_decrypt(key, server_iv, data[:2048]):
+                break
+        if len(data) < 32:
+            return False
+        pt = _aes_cfb_decrypt(key, server_iv, data[:2048])
+        return b"HTTP" in pt
+    except Exception:
+        return False
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def test_ss(node_info):
+    method = (node_info.get("method") or "").lower()
+    password = node_info.get("password")
+    host = node_info["host"]
+    port = int(node_info["port"])
+    if not password or not host:
+        return False
+
+    if method in SS_AEAD_METHODS:
+        for key in _ss_keys(method, password):
+            if _ss_aead_try(method, key, host, port):
+                return True
+        return False
+    if method in SS_STREAM_METHODS:
+        key_len = {"aes-128-cfb": 16, "aes-192-cfb": 24, "aes-256-cfb": 32}[method]
+        for key in [_evp_bytes_to_key(password.encode("utf-8"), key_len)]:
+            dec = _b64_maybe(password)
+            candidates = [key]
+            if dec is not None:
+                alt = _evp_bytes_to_key(dec, key_len)
+                if alt != key:
+                    candidates.append(alt)
+            for k in candidates:
+                if _ss_stream_try(method, k, host, port):
+                    return True
+        return False
+    # 2022 / unknown methods: lenient TCP check (old behavior)
+    try:
+        _connect_tcp(host, port).close()
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------- lenient fallbacks
+def _test_reality(host, port, sni):
+    """REALITY cannot be protocol-tested without x25519 auth; check TLS + real response."""
+    try:
+        sock = _connect_tcp(host, port)
+        try:
+            t = _tls_wrap(sock, host, sni or host)
+            t.sendall(
+                (f"GET / HTTP/1.1\r\nHost: {sni or host}\r\n"
+                 "User-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n").encode("utf-8")
+            )
+            resp = _recv_some(t, 128, timeout=4.0)
+            return len(resp) > 0
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+    except Exception:
+        return False
+
+
+def _test_grpc(host, port, sni):
+    """gRPC is HTTP/2: send the h2 preface and expect a SETTINGS frame."""
+    try:
+        sock = _connect_tcp(host, port)
+        try:
+            t = _tls_wrap(sock, host, sni or host)
+            t.sendall(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+            resp = _recv_some(t, 24, timeout=4.0)
+            if len(resp) < 9:
+                return False
+            if resp[0] == 0x00 and resp[3] == 0x04:
+                return True
+            return not resp.startswith(b"HTTP/1.1")
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+    except Exception:
+        return False
+
+
+def _test_tcp_only(host, port):
+    try:
+        _connect_tcp(host, port).close()
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------- main dispatcher
+def strict_myanmar_real_ping(node_info, target_idx=0):
+    """🎯 အစစ်အမှန် Proxy Protocol စစ်ဆေးခြင်း (TCP/TLS ping သက်သက်မဟုတ်)
+    Target တစ်ခုနှင့် မရလျှင် နောက် target တစ်ခုဖြင့် ပြန်စမ်းသည်"""
+    try:
+        port = int(node_info["port"])
+        if port not in ALLOWED_PORTS:
+            return False
+        sni = node_info.get("sni")
+        if sni and any(b in sni.lower() for b in BLOCKED_SNIS):
+            return False
+        host = node_info.get("host")
+        if not host:
+            return False
+        if _is_cloudflare_ip(host):
+            return False
+        if _is_domain_fronted(node_info):
+            return False
+
+        ntype = node_info.get("type")
+
+        if ntype == "ss":
+            return test_ss(node_info)
+
+        if ntype in ("hysteria2", "hy2", "tuic"):
+            return _test_tcp_only(host, port)
+
+        network = (node_info.get("network") or "tcp").lower()
+        security = (node_info.get("security") or "none").lower()
+
+        if security == "reality":
+            return _test_reality(host, port, sni)
+        if network == "grpc":
+            return _test_grpc(host, port, sni)
+
+        sock = _connect_tcp(host, port)
+        try:
+            use_tls = port in TLS_PORTS or security == "tls"
+            if use_tls:
+                sock = _tls_wrap(sock, host, sni or host)
+
+            if network in ("ws", "http"):
+                hdr_host = node_info.get("host_header") or sni or host
+                path = node_info.get("path") or "/"
+                if not path.startswith("/"):
+                    path = "/" + path
+                if not _ws_handshake(sock, hdr_host, path):
+                    return False
+                if ntype == "vmess":
+                    return True
+                framed = network == "ws"
+                if ntype == "vless":
+                    return _check_vless(sock, node_info, framed, target_idx)
+                if ntype == "trojan":
+                    return _check_trojan(sock, node_info, framed, target_idx)
+                return True
+
+            if ntype == "vless":
+                return _check_vless(sock, node_info, False, target_idx)
+            if ntype == "trojan":
+                return _check_trojan(sock, node_info, False, target_idx)
+            if ntype == "vmess":
+                return _check_vmess(sock, node_info, False)
+            return True
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+    except Exception:
+        if target_idx + 1 < len(RELAY_TARGETS):
+            return strict_myanmar_real_ping(node_info, target_idx + 1)
+        return False
+
+
+def parse_and_extract(line):
+    try:
+        if line.startswith("vmess://"):
+            b64_str = line.replace("vmess://", "")
+            b64_str += "=" * ((4 - len(b64_str) % 4) % 4)
+            decoded = json.loads(base64.b64decode(b64_str).decode("utf-8"))
+            return {
+                "type": "vmess",
+                "data": decoded,
+                "host": decoded.get("add"),
+                "port": int(decoded.get("port")),
+                "sni": decoded.get("sni") or decoded.get("host") or None,
+                "host_header": decoded.get("host") or None,
+                "path": decoded.get("path", "/"),
+                "network": decoded.get("net") or "tcp",
+                "security": decoded.get("tls") or "none",
+                "raw": line
+            }
+        elif line.startswith(("vless://", "trojan://")):
+            parsed = urllib.parse.urlparse(line)
+            query_params = urllib.parse.parse_qs(parsed.query)
+            user = urllib.parse.unquote(parsed.username or "")
+            network = (query_params.get("type", ["tcp"])[0] or "tcp").lower()
+            if network == "tcp" and query_params.get("ws", ["0"])[0] in ("1", "true"):
+                network = "ws"
+            path = query_params.get("path", [None])[0] or query_params.get("wspath", [None])[0] or "/"
+            host_header = query_params.get("host", [None])[0]
+            sni = query_params.get("sni", [None])[0] or host_header
+            return {
+                "type": "vless" if line.startswith("vless://") else "trojan",
+                "uuid": user,
+                "password": user,
+                "host": parsed.hostname,
+                "port": parsed.port or 443,
+                "sni": sni,
+                "host_header": host_header,
+                "path": path,
+                "network": network,
+                "security": query_params.get("security", ["none"])[0] or "none",
+                "raw": line
+            }
+        elif line.startswith("ss://"):
+            base_url = line.split("#")[0]
+            parsed = urllib.parse.urlparse(base_url)
+            raw_ss = base_url.replace("ss://", "")
+            if "@" in raw_ss:
+                user_info, host_port = raw_ss.split("@", 1)
+            else:
+                user_info, host_port = base64.b64decode(raw_ss + "===").decode("utf-8").split("@", 1)
+            method, password = "unknown", ""
+            try:
+                dec = base64.b64decode(user_info + "===").decode("utf-8")
+                method, password = dec.split(":", 1)
+            except Exception:
+                try:
+                    method, password = urllib.parse.unquote(user_info).split(":", 1)
+                except Exception:
+                    pass
+            host = parsed.hostname
+            port = parsed.port
+            if not host or not port:
+                h, p = host_port.split(":", 1)
+                host, port = h, int(p)
+            return {
+                "type": "ss",
+                "method": method,
+                "password": urllib.parse.unquote(password),
+                "host": host,
+                "port": int(port),
+                "sni": None,
+                "path": "/",
+                "raw": line
+            }
+        elif line.startswith(("hysteria2://", "hy2://", "tuic://")):
+            parsed = urllib.parse.urlparse(line)
+            return {
+                "type": "hysteria2" if line.startswith(("hysteria2://", "hy2://")) else "tuic",
+                "host": parsed.hostname,
+                "port": int(parsed.port or 443),
+                "sni": None,
+                "path": "/",
+                "raw": line
+            }
+    except Exception:
+        return None
+    return None
+
+
+def test_node(node_info):
+    host = node_info.get("host")
+    port = node_info.get("port")
+
+    if host and port and strict_myanmar_real_ping(node_info):
+        return node_info
+    return None
+
+
+def fetch_and_process_country(country_code, config):
+    url = config["url"]
+    flag = config["flag"]
+
+    try:
+        res = requests.get(url, timeout=10)
+        content = res.text.strip()
+        try:
+            decoded = base64.b64decode(content).decode("utf-8")
+            lines = decoded.splitlines()
+        except Exception:
+            lines = content.splitlines()
+
+        nodes_to_test = []
+        for line in lines:
+            line = line.strip()
+            if line and any(line.startswith(p) for p in SUPPORTED_PROTOCOLS):
+                info = parse_and_extract(line)
+                if info:
+                    nodes_to_test.append(info)
+
+        valid_nodes = []
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            results = executor.map(test_node, nodes_to_test)
+            for r in results:
+                if r:
+                    valid_nodes.append(r)
+
+        # Port 443 (For Wifi) နှင့် ကျန် Port (For Sim Data and Wifi) ခွဲခြားခြင်း
+        wifi_nodes = [n for n in valid_nodes if n["port"] == 443]
+        sim_priority_nodes = [
+            n for n in valid_nodes
+            if n["port"] in PRIORITY_PORTS and n["port"] != 443
+        ]
+        sim_normal_nodes = [
+            n for n in valid_nodes
+            if n["port"] not in PRIORITY_PORTS and n["port"] != 443
+        ]
+
+        # Wifi 10 ခု (SG 1-10) + Sim 10 ခု (SG 11-20) — မပြည့်လျှင် ရှိသလောက်
+        combined = wifi_nodes[:WIFI_SLOTS] + (sim_priority_nodes + sim_normal_nodes)[:SIM_SLOTS]
+
+        # 🔁 တူညီသော Server (host:port) ထပ်နေလျှင် ဖယ်ထုတ်ခြင်း
+        seen = set()
+        unique_nodes = []
+        for item in combined:
+            key = (item.get("host"), item.get("port"))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_nodes.append(item)
+        combined = unique_nodes
+
+        formatted = []
+        count = 1
+        for item in combined:
+            raw = item["raw"]
+
+            # Port 443 = For Wifi, ကျန် Port = For Sim Data and Wifi
+            if item["port"] == 443:
+                clean_name = f"{flag} {country_code} {count} (For Wifi)"
+            else:
+                clean_name = f"{flag} {country_code} {count} (For Sim Data and Wifi)"
+
+            if item["type"] == "vmess":
+                data = item["data"]
+                data["ps"] = clean_name
+                new_b64 = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
+                formatted.append(f"vmess://{new_b64}")
+            else:
+                base_url = raw.split("#")[0]
+
+                new_name = urllib.parse.quote(clean_name)
+                formatted.append(f"{base_url}#{new_name}")
+                
+            count += 1
+
+        return formatted
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return []
+
+
+def main():
+    all_nodes = []
+    for country_code, config in SOURCES.items():
+        print(f"Testing nodes for {country_code}...")
+        nodes = fetch_and_process_country(country_code, config)
+        all_nodes.extend(nodes)
+        print(f"Saved for {country_code}: {len(nodes)} nodes")
+
+    tz = pytz.timezone("Asia/Yangon")
+    current_time = datetime.now(tz).strftime("%I:%M %p").lstrip("0")
+
+    profile_title = f"#profile-title: {current_time} Updated\n"
+    plain_content = profile_title + "\n".join(all_nodes)
+
+    encoded_content = base64.b64encode(plain_content.encode("utf-8")).decode("utf-8")
+
+    with open("servers", "w", encoding="utf-8") as f:
+        f.write(encoded_content)
+
+    print(f"Done! Updated nodes with clean names.")
+
+
+if __name__ == "__main__":
+    main()
