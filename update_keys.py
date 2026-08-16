@@ -23,11 +23,14 @@ SOURCES = {
     },
 }
 
-MAX_PER_COUNTRY = 20
+# 🎯 တစ်နိုင်ငံလျှင် Server 20 ခု (Wifi 10 ခု + Sim 10 ခု)
+WIFI_SLOTS = 10  # Port 443 (For Wifi)
+SIM_SLOTS = 10   # ကျန် Port များ (For Sim Data and Wifi)
 
-# 🎯 ဦးစားပေးစစ်ထုတ်မည့် Port များ (Port 443 ကို ပယ်ထားသည်)
+# 🎯 Sim Data + Wifi အဖွဲ့အတွင်း ဦးစားပေးစစ်ထုတ်မည့် Port များ
 PRIORITY_PORTS = {2096, 8388}
-ALLOWED_PORTS = {2096, 8388, 8443, 2053, 2083, 2087}
+# Port 443 (Wifi) အပါအဝင် စစ်ထုတ်ခွင့်ပြုထားသော Port အားလုံး
+ALLOWED_PORTS = {443, 2096, 8388, 8443, 2053, 2083, 2087}
 
 BLOCKED_SNIS = ["cloudflare.com", "speedtest.net", "co.uk", "127.0.0.1"]
 SUPPORTED_PROTOCOLS = ("vless://", "vmess://", "trojan://", "ss://", "hysteria2://", "hy2://", "tuic://")
@@ -172,19 +175,30 @@ def fetch_and_process_country(country_code, config):
                 if r:
                     valid_nodes.append(r)
 
-        # Priority Sorting
-        priority_nodes = [n for n in valid_nodes if n["port"] in PRIORITY_PORTS]
-        normal_nodes = [n for n in valid_nodes if n["port"] not in PRIORITY_PORTS]
+        # Port 443 (For Wifi) နှင့် ကျန် Port (For Sim Data and Wifi) ခွဲခြားခြင်း
+        wifi_nodes = [n for n in valid_nodes if n["port"] == 443]
+        sim_priority_nodes = [
+            n for n in valid_nodes
+            if n["port"] in PRIORITY_PORTS and n["port"] != 443
+        ]
+        sim_normal_nodes = [
+            n for n in valid_nodes
+            if n["port"] not in PRIORITY_PORTS and n["port"] != 443
+        ]
 
-        combined = (priority_nodes + normal_nodes)[:MAX_PER_COUNTRY]
+        # Wifi 10 ခု (SG 1-10) + Sim 10 ခု (SG 11-20) — မပြည့်လျှင် ရှိသလောက်
+        combined = wifi_nodes[:WIFI_SLOTS] + (sim_priority_nodes + sim_normal_nodes)[:SIM_SLOTS]
 
         formatted = []
         count = 1
         for item in combined:
             raw = item["raw"]
-            
-            # Node Name များကို ပုံမှန်အတိုင်း သန့်သန့်ရှင်းရှင်း ထားရှိခြင်း
-            clean_name = f"{flag} {country_code} {count}"
+
+            # Port 443 = For Wifi, ကျန် Port = For Sim Data and Wifi
+            if item["port"] == 443:
+                clean_name = f"{flag} {country_code} {count} (For Wifi)"
+            else:
+                clean_name = f"{flag} {country_code} {count} (For Sim Data and Wifi)"
 
             if item["type"] == "vmess":
                 data = item["data"]
