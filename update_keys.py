@@ -17,6 +17,10 @@ SOURCES = {
         "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/jp/all.txt",
         "flag": "🇯🇵",
     },
+    "CA": {
+        "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/ca/all.txt",
+        "flag": "🇨🇦",
+    },
 }
 
 # 🎯 တစ်နိုင်ငံလျှင် Server 20 ခု (Wifi 10 ခု + Sim 10 ခု)
