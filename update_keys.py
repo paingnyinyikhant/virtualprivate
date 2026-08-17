@@ -8,20 +8,46 @@ import urllib.parse
 import pytz
 import requests
 
+# 🌐 အရန်နောက်ထပ် Source (Freedom-V2Ray Mixed List) — မူရင်း node မလုံလောက်လျှင် ဖြည့်ရန်
+FREEDOM_MIX_URL = "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/mix_sub.txt"
+
 SOURCES = {
-    "SG": {
-        "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/sg/all.txt",
-        "flag": "🇸🇬",
-    },
-    "JP": {
-        "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/jp/all.txt",
-        "flag": "🇯🇵",
-    },
-    "CA": {
-        "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/ca/all.txt",
-        "flag": "🇨🇦",
-    },
+    # [0] = အဓိက Source (အရင်ယူ) → [1] = အရန် Source (မပြည့်လျှင် ဖြည့်)
+    "SG": [
+        {
+            "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/sg/all.txt",
+            "flag": "🇸🇬",
+        },
+        {
+            "url": FREEDOM_MIX_URL,
+            "flag": "🇸🇬",
+            "name_filter": "🇸🇬",
+        },
+    ],
+    "JP": [
+        {
+            "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/jp/all.txt",
+            "flag": "🇯🇵",
+        },
+        {
+            "url": FREEDOM_MIX_URL,
+            "flag": "🇯🇵",
+            "name_filter": "🇯🇵",
+        },
+    ],
+    "US": [
+        {
+            "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/us/all.txt",
+            "flag": "🇺🇸",
+        },
+        {
+            "url": FREEDOM_MIX_URL,
+            "flag": "🇺🇸",
+            "name_filter": "🇺🇸",
+        },
+    ],
 }
+
 
 # 🎯 တစ်နိုင်ငံလျှင် Server 20 ခု (Wifi 10 ခု + Sim 10 ခု)
 WIFI_SLOTS = 10  # Port 443 (For Wifi)
@@ -968,88 +994,119 @@ def test_node(node_info):
     return None
 
 
-def fetch_and_process_country(country_code, config):
-    url = config["url"]
-    flag = config["flag"]
+def fetch_and_process_country(country_code, configs):
+    """နိုင်ငံတစ်ခုအတွက် Source အများအပြား (အဓိက → အရန်) မှ Node များ စုစည်းခြင်း
+    - [0] အဓိက Source မှ အရင်ယူ → မပြည့်လျှင် [1] အရန် Source မှ ဖြည့်
+    - တူညီသော Server (host:port) ထပ်နေလျှင် ၁ ခုသာ ထည့်"""
+    all_wifi = []
+    all_sim = []
+    seen = set()
 
-    try:
-        res = requests.get(url, timeout=10)
-        content = res.text.strip()
+    for config in configs:
+        url = config["url"]
+        flag = config["flag"]
+        name_filter = config.get("name_filter")  # ဥပမာ "🇺🇸" — node name အလိုက် စစ်ထုတ်
+
         try:
-            decoded = base64.b64decode(content).decode("utf-8")
-            lines = decoded.splitlines()
-        except Exception:
-            lines = content.splitlines()
+            # 🌐 Freedom Mixed List ကဲ့သို့ URL တစ်ခုတည်းကို ထပ်ခါထပ်ခါ မဆွဲရန် Cache
+            if url in _URL_CACHE:
+                lines = _URL_CACHE[url]
+            else:
+                res = requests.get(url, timeout=10)
+                content = res.text.strip()
+                try:
+                    lines = base64.b64decode(content).decode("utf-8").splitlines()
+                except Exception:
+                    lines = content.splitlines()
+                _URL_CACHE[url] = lines
 
-        nodes_to_test = []
-        for line in lines:
-            line = line.strip()
-            if line and any(line.startswith(p) for p in SUPPORTED_PROTOCOLS):
+            nodes_to_test = []
+            for line in lines:
+                line = line.strip()
+                if not line or not any(line.startswith(p) for p in SUPPORTED_PROTOCOLS):
+                    continue
+                if name_filter:
+                    # Node အမည်ထဲမှ flag (ဥပမာ 🇺🇸) ပါမှသာ ထည့်မည်
+                    raw_name = line.split("#", 1)[1] if "#" in line else ""
+                    try:
+                        raw_name = urllib.parse.unquote(raw_name)
+                    except Exception:
+                        pass
+                    if name_filter not in raw_name:
+                        continue
                 info = parse_and_extract(line)
                 if info:
                     nodes_to_test.append(info)
 
-        valid_nodes = []
-        with ThreadPoolExecutor(max_workers=30) as executor:
-            results = executor.map(test_node, nodes_to_test)
-            for r in results:
-                if r:
-                    valid_nodes.append(r)
+            valid_nodes = []
+            with ThreadPoolExecutor(max_workers=30) as executor:
+                results = executor.map(test_node, nodes_to_test)
+                for r in results:
+                    if r:
+                        valid_nodes.append(r)
 
-        # Port 443 (For Wifi) နှင့် ကျန် Port (For Sim Data and Wifi) ခွဲခြားခြင်း
-        wifi_nodes = [n for n in valid_nodes if n["port"] == 443]
-        sim_priority_nodes = [
-            n for n in valid_nodes
-            if n["port"] in PRIORITY_PORTS and n["port"] != 443
-        ]
-        sim_normal_nodes = [
-            n for n in valid_nodes
-            if n["port"] not in PRIORITY_PORTS and n["port"] != 443
-        ]
+            # Port 443 (For Wifi) နှင့် ကျန် Port (For Sim Data and Wifi) ခွဲခြားခြင်း
+            wifi_nodes = [n for n in valid_nodes if n["port"] == 443]
+            sim_priority_nodes = [
+                n for n in valid_nodes
+                if n["port"] in PRIORITY_PORTS and n["port"] != 443
+            ]
+            sim_normal_nodes = [
+                n for n in valid_nodes
+                if n["port"] not in PRIORITY_PORTS and n["port"] != 443
+            ]
 
-        # Wifi 10 ခု (SG 1-10) + Sim 10 ခု (SG 11-20) — မပြည့်လျှင် ရှိသလောက်
-        combined = wifi_nodes[:WIFI_SLOTS] + (sim_priority_nodes + sim_normal_nodes)[:SIM_SLOTS]
+            # 🔁 တူညီသော Server (host:port) ထပ်နေလျှင် ဖယ်ထုတ်ခြင်း
+            for n in wifi_nodes + sim_priority_nodes + sim_normal_nodes:
+                key = (n.get("host"), n.get("port"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                if n["port"] == 443:
+                    all_wifi.append(n)
+                else:
+                    all_sim.append(n)
 
-        # 🔁 တူညီသော Server (host:port) ထပ်နေလျှင် ဖယ်ထုတ်ခြင်း
-        seen = set()
-        unique_nodes = []
-        for item in combined:
-            key = (item.get("host"), item.get("port"))
-            if key in seen:
-                continue
-            seen.add(key)
-            unique_nodes.append(item)
-        combined = unique_nodes
+        except Exception as e:
+            print(f"Error ({country_code} / {url}): {e}")
 
-        formatted = []
-        count = 1
-        for item in combined:
-            raw = item["raw"]
+    # Wifi 10 ခု (SG 1-10) + Sim 10 ခု (SG 11-20) — မပြည့်လျှင် ရှိသလောက်
+    combined = all_wifi[:WIFI_SLOTS] + all_sim[:SIM_SLOTS]
 
-            # Port 443 = For Wifi, ကျန် Port = For Sim Data and Wifi
-            if item["port"] == 443:
-                clean_name = f"{flag} {country_code} {count} (For Wifi)"
-            else:
-                clean_name = f"{flag} {country_code} {count} (For Sim Data and Wifi)"
+    # 🎯 20 ခု မပြည့်လျှင် (Sim port node ရှားပါးလျှင်) Wifi node များဖြင့် ဖြည့်ပါ
+    if len(combined) < WIFI_SLOTS + SIM_SLOTS:
+        remaining = WIFI_SLOTS + SIM_SLOTS - len(combined)
+        combined += all_wifi[WIFI_SLOTS: WIFI_SLOTS + remaining]
 
-            if item["type"] == "vmess":
-                data = item["data"]
-                data["ps"] = clean_name
-                new_b64 = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
-                formatted.append(f"vmess://{new_b64}")
-            else:
-                base_url = raw.split("#")[0]
+    flag = configs[0]["flag"]
+    formatted = []
+    count = 1
+    for item in combined:
+        raw = item["raw"]
 
-                new_name = urllib.parse.quote(clean_name)
-                formatted.append(f"{base_url}#{new_name}")
-                
-            count += 1
+        # Port 443 = For Wifi, ကျန် Port = For Sim Data and Wifi
+        if item["port"] == 443:
+            clean_name = f"{flag} {country_code} {count} (For Wifi)"
+        else:
+            clean_name = f"{flag} {country_code} {count} (For Sim Data and Wifi)"
 
-        return formatted
+        if item["type"] == "vmess":
+            data = item["data"]
+            data["ps"] = clean_name
+            new_b64 = base64.b64encode(json.dumps(data).encode("utf-8")).decode("utf-8")
+            formatted.append(f"vmess://{new_b64}")
+        else:
+            base_url = raw.split("#")[0]
 
-    except Exception as e:
-        print(f"Error: {e}")
-        return []
+            new_name = urllib.parse.quote(clean_name)
+            formatted.append(f"{base_url}#{new_name}")
+
+        count += 1
+
+    return formatted
+
+
+_URL_CACHE = {}
 
 
 def main():
