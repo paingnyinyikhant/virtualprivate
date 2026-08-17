@@ -1084,11 +1084,8 @@ def fetch_and_process_country(country_code, configs):
     for item in combined:
         raw = item["raw"]
 
-        # Port 443 = For Wifi, ကျန် Port = For Sim Data and Wifi
-        if item["port"] == 443:
-            clean_name = f"{flag} {country_code} {count} (For Wifi)"
-        else:
-            clean_name = f"{flag} {country_code} {count} (For Sim Data and Wifi)"
+        # Node အမည် — နိုင်ငံအလိုက် ရိုးရိုးရှင်းရှင်း (ဥပမာ 🇸🇬 SG 1)
+        clean_name = f"{flag} {country_code} {count}"
 
         if item["type"] == "vmess":
             data = item["data"]
