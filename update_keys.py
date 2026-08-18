@@ -10,7 +10,6 @@ import requests
 
 # 🌐 အရန်နောက်ထပ် Source (Freedom-V2Ray Mixed List) — မူရင်း node မလုံလောက်လျှင် ဖြည့်ရန်
 FREEDOM_MIX_URL = "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/configs/mix_sub.txt"
-
 SOURCES = {
     # [0] = အဓိက Source (အရင်ယူ) → [1] = အရန် Source (မပြည့်လျှင် ဖြည့်)
     "SG": [
@@ -44,6 +43,17 @@ SOURCES = {
             "url": FREEDOM_MIX_URL,
             "flag": "🇺🇸",
             "name_filter": "🇺🇸",
+        },
+    ],
+    "TH": [
+        {
+            "url": "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/th/all.txt",
+            "flag": "🇹🇭",
+        },
+        {
+            "url": FREEDOM_MIX_URL,
+            "flag": "🇹🇭",
+            "name_filter": "🇹🇭",
         },
     ],
 }
