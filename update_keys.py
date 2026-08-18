@@ -50,8 +50,8 @@ SOURCES = {
 
 
 # 🎯 တစ်နိုင်ငံလျှင် Server 20 ခု (Wifi 10 ခု + Sim 10 ခု)
-WIFI_SLOTS = 10  # Port 443 (For Wifi)
-SIM_SLOTS = 10   # ကျန် Port များ (For Sim Data and Wifi)
+# 🎯 နိုင်ငံတစ်ခုလျှင် Server အများဆုံး 10 ခု (Sim Port ဦးစားပေး → 443 ဖြည့်)
+MAX_PER_COUNTRY = 10
 
 # 🎯 Sim Data + Wifi အဖွဲ့အတွင်း ဦးစားပေးစစ်ထုတ်မည့် Port များ
 PRIORITY_PORTS = {2096, 8388}
@@ -1035,7 +1035,8 @@ def fetch_and_process_country(country_code, configs):
                     if name_filter not in raw_name:
                         continue
                 info = parse_and_extract(line)
-                if info:
+                # 🚫 Trojan Protocol မကြိုက်သောကြောင့် ဖယ်ထုတ်ခြင်း
+                if info and info.get("type") != "trojan":
                     nodes_to_test.append(info)
 
             valid_nodes = []
@@ -1045,19 +1046,18 @@ def fetch_and_process_country(country_code, configs):
                     if r:
                         valid_nodes.append(r)
 
-            # Port 443 (For Wifi) နှင့် ကျန် Port (For Sim Data and Wifi) ခွဲခြားခြင်း
+            # 🎯 Sim Port (2096, 8388, 8443, 2053) ဦးစားပေး → နောက်ဆုံး Port 443
+            sim_priority_nodes = [n for n in valid_nodes if n["port"] in PRIORITY_PORTS]
+            sim_other_nodes = [
+                n for n in valid_nodes
+                if n["port"] in ALLOWED_PORTS
+                and n["port"] not in PRIORITY_PORTS
+                and n["port"] != 443
+            ]
             wifi_nodes = [n for n in valid_nodes if n["port"] == 443]
-            sim_priority_nodes = [
-                n for n in valid_nodes
-                if n["port"] in PRIORITY_PORTS and n["port"] != 443
-            ]
-            sim_normal_nodes = [
-                n for n in valid_nodes
-                if n["port"] not in PRIORITY_PORTS and n["port"] != 443
-            ]
 
             # 🔁 တူညီသော Server (host:port) ထပ်နေလျှင် ဖယ်ထုတ်ခြင်း
-            for n in wifi_nodes + sim_priority_nodes + sim_normal_nodes:
+            for n in sim_priority_nodes + sim_other_nodes + wifi_nodes:
                 key = (n.get("host"), n.get("port"))
                 if key in seen:
                     continue
@@ -1070,13 +1070,8 @@ def fetch_and_process_country(country_code, configs):
         except Exception as e:
             print(f"Error ({country_code} / {url}): {e}")
 
-    # Wifi 10 ခု (SG 1-10) + Sim 10 ခု (SG 11-20) — မပြည့်လျှင် ရှိသလောက်
-    combined = all_wifi[:WIFI_SLOTS] + all_sim[:SIM_SLOTS]
-
-    # 🎯 20 ခု မပြည့်လျှင် (Sim port node ရှားပါးလျှင်) Wifi node များဖြင့် ဖြည့်ပါ
-    if len(combined) < WIFI_SLOTS + SIM_SLOTS:
-        remaining = WIFI_SLOTS + SIM_SLOTS - len(combined)
-        combined += all_wifi[WIFI_SLOTS: WIFI_SLOTS + remaining]
+    # 🎯 Sim Port node များ အရင် → မလုံလောက်လျှင် Port 443 — နိုင်ငံတစ်ခုလျှင် အများဆုံး 10 ခု
+    combined = (all_sim + all_wifi)[:MAX_PER_COUNTRY]
 
     flag = configs[0]["flag"]
     formatted = []
