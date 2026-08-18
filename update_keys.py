@@ -1037,6 +1037,9 @@ def fetch_and_process_country(country_code, configs):
                 info = parse_and_extract(line)
                 # 🚫 Trojan Protocol မကြိုက်သောကြောင့် ဖယ်ထုတ်ခြင်း
                 if info and info.get("type") != "trojan":
+                    # 🚫 Sim Port (2096, 8388, 8443, 2053) မဟုတ်သော node (Port 443) များ ကျော်ခြင်း
+                    if info.get("port") == 443:
+                        continue
                     nodes_to_test.append(info)
 
             valid_nodes = []
@@ -1070,8 +1073,8 @@ def fetch_and_process_country(country_code, configs):
         except Exception as e:
             print(f"Error ({country_code} / {url}): {e}")
 
-    # 🎯 Sim Port node များ အရင် → မလုံလောက်လျှင် Port 443 — နိုင်ငံတစ်ခုလျှင် အများဆုံး 10 ခု
-    combined = (all_sim + all_wifi)[:MAX_PER_COUNTRY]
+    # 🎯 Sim Port (2096, 8388, 8443, 2053) node များသာ — နိုင်ငံတစ်ခုလျှင် အများဆုံး 10 ခု
+    combined = all_sim[:MAX_PER_COUNTRY]
 
     flag = configs[0]["flag"]
     formatted = []
