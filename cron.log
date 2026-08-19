@@ -1,0 +1,255 @@
+xray: /data/data/com.termux/files/usr/bin/xray | workers=3 | timeout=5s
+Fetching configs...
+Nodes: 69
+=== Real Delay (parallel, safe) ===
+ [1/69]    - ms  FAIL (tcp_closed)  EPODONIOS
+ [2/69]    - ms  FAIL (tcp_closed)  🇸🇬 Join+Telegram:@Farah_VPN 🇸🇬
+ [3/69]    - ms  FAIL (tcp_closed)  hamedp71::🇸🇬
+ [4/69]    - ms  FAIL (xray_dead)  рҹҮёрҹҮ¬SG-рҹҡҖ@VPNine1
+ [5/69]    - ms  FAIL (curl_fail)  🔥Join+Telegram:@Farah_VPN🟣
+ [6/69]    - ms  FAIL (curl_fail)  🔥Join+Telegram:@Farah_VPN🟣
+ [7/69]    - ms  FAIL (tcp_closed)  hamedp71::🇸🇬
+ [8/69]    - ms  FAIL (tcp_closed)  EPODONIOS
+ [9/69]    - ms  FAIL (tcp_closed)  рҹҮЁрҹҮҰ Join+Telegram:@Farah_VPN рҹҮЁрҹҮҰ
+ [10/69]    - ms  FAIL (curl_fail)  hamedp71::🏴‍☠️
+ [11/69]    - ms  FAIL (xray_dead)  🔥Join+Telegram:@Farah_VPN🟣
+ [12/69]    - ms  FAIL (curl_fail)  🔥Join+Telegram:@Farah_VPN🟣
+ [13/69]    - ms  FAIL (tcp_closed)  hamedp71::🇸🇬
+ [14/69]  794 ms  hamedp71::🇸🇬
+ [15/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [16/69]    - ms  FAIL (curl_fail)  >>@freeland8::SG
+ [17/69]  281 ms  EPODONIOS
+ [18/69]    - ms  FAIL (curl_fail)  🇸🇬 Join+Telegram:@Farah_VPN 🇸🇬
+ [19/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [20/69]    - ms  FAIL (tcp_closed)  EPODONIOS
+ [21/69]    - ms  FAIL (curl_fail)  🔥Join+Telegram:@Farah_VPN🟣
+ [22/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [23/69]    - ms  FAIL (tcp_closed)  hamedp71::🇸🇬
+ [24/69]    - ms  FAIL (xray_dead)  🔥Join+Telegram:@Farah_VPN🟣
+ [25/69]    - ms  FAIL (tcp_closed)  EPODONIOS
+ [26/69]    - ms  FAIL (tcp_closed)  hamedp71::🇸🇬
+ [27/69]    - ms  FAIL (curl_fail)  🔥Join+Telegram:@Farah_VPN🟣
+ [28/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [29/69]  668 ms  hamedp71::🇸🇬
+ [30/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [31/69]    - ms  FAIL (tcp_closed)  T.me/Vpn_Mafia рҹҮёрҹҮ¬
+ [32/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [33/69]    - ms  FAIL (xray_dead)  рҹҮёрҹҮ¬SG-рҹҡҖ@VPNine1
+ [34/69]    - ms  FAIL (tcp_closed)  EPODONIOS
+ [35/69]    - ms  FAIL (tcp_closed)  @Begoo_VPN ВІвҒ¶Ві
+ [36/69]    - ms  FAIL (xray_dead)  EPODONIOS
+ [37/69]  517 ms  hamedp71::🏴‍☠️
+ [38/69]    - ms  FAIL (curl_fail)  🏳️ ShatakVPN 565400
+ [39/69]  383 ms  ж–°еҠ еқЎ
+ [40/69]    - ms  FAIL (curl_fail)  hamedp71::🇸🇬
+ [41/69]  295 ms  hamedp71::🇸🇬
+ [42/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [43/69]    - ms  FAIL (xray_dead)  EPODONIOS
+ [44/69]    - ms  FAIL (curl_fail)  hamedp71::🇸🇬
+ [45/69]    - ms  FAIL (curl_fail)  hamedp71::🇸🇬
+ [46/69]    - ms  FAIL (tcp_closed)  @v2rayng3
+ [47/69]  388 ms  hamedp71::🇸🇬
+ [48/69]    - ms  FAIL (tcp_closed)  рҹҡҖt.me/iProxyChannel
+ [49/69]    - ms  FAIL (tcp_closed)  🇸🇬 344 - SG - VLESS/REALITY/PBK/SID/VISION/UTLS - 4321
+ [50/69]    - ms  FAIL (curl_fail)  hamedp71::🇸🇬
+ [51/69]    - ms  FAIL (tcp_closed)  🇸🇬SG-🚀@VPNine1
+ [52/69]    - ms  FAIL (tcp_closed)  EPODONIOS
+ [53/69]  907 ms  hamedp71::🇸🇬
+ [54/69]    - ms  FAIL (tcp_closed)  🏳️ ShatakVPN 703464
+ [55/69] 2965 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [56/69]    - ms  FAIL (curl_fail)  🇸🇬 SG | VLESS | @freeconfigsplus #1 [fast]
+ [57/69]    - ms  FAIL (curl_fail)  🇸🇬 سنگاپور | https://t.me/FREECONFIGSPLUS ✨
+ [58/69]    - ms  FAIL (tcp_closed)  рҹҡҖt.me/iProxyChannel
+ [59/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [60/69]    - ms  FAIL (tcp_closed)  рҹҮёрҹҮ¬SG
+ [61/69]    - ms  FAIL (tcp_closed)  EPODONIOS
+ [62/69]  432 ms  hamedp71::🇸🇬
+ [63/69]    - ms  FAIL (curl_fail)  🇸🇬 Join+Telegram:@Farah_VPN 🇸🇬
+ [64/69]    - ms  FAIL (tcp_closed)  рҹҮёрҹҮ¬SG-рҹҡҖ@VPNine1
+ [65/69]    - ms  FAIL (curl_fail)  EPODONIOS
+ [66/69]    - ms  FAIL (tcp_closed)  🇸🇬 428 - SG - VLESS/WS - 48140
+ [67/69]    - ms  FAIL (tcp_closed)  🇸🇬SG
+ [68/69]    - ms  FAIL (curl_fail)  рҹҮёрҹҮ¬SG
+ [69/69]    - ms  FAIL (curl_fail)  рҹҮёрҹҮ¬SG-рҹҡҖ@VPNine1
+
+Working: 10 / 69
+#profile-title: 4:12 PM Updated
+Wrote servers  (🇸🇬 SG 1 = fastest)
+[main 6991ff3] Auto update: Wed Aug 19 16:12:55 +0630 2026
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+To https://github.com/paingnyinyikhant/virtualprivate.git
+   8873c43..6991ff3  main -> main
+xray: /data/data/com.termux/files/usr/bin/xray | workers=3 | timeout=5s
+Fetching configs...
+Nodes: 69
+=== Real Delay (parallel, safe) ===
+ [1/69]  804 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [2/69]  355 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [3/69]  624 ms  hamedp71::🇸🇬
+ [4/69]  360 ms  рҹҮёрҹҮ¬SG-рҹҡҖ@VPNine1
+ [5/69]    - ms  FAIL (xray_dead)  🇸🇬 Join+Telegram:@Farah_VPN 🇸🇬
+ [6/69]  329 ms  hamedp71::🇸🇬
+ [7/69]  348 ms  hamedp71::🏴‍☠️
+ [8/69]  335 ms  EPODONIOS
+ [9/69]  344 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [10/69]  390 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [11/69]  287 ms  >>@freeland8::SG
+ [12/69]  293 ms  hamedp71::🇸🇬
+ [13/69]    - ms  FAIL (curl_fail)  EPODONIOS
+ [14/69]  322 ms  hamedp71::🇸🇬
+ [15/69]  301 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [16/69]    - ms  FAIL (curl_fail)  рҹҮЁрҹҮҰ Join+Telegram:@Farah_VPN рҹҮЁрҹҮҰ
+ [17/69]  666 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [18/69]  346 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [19/69]  370 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [20/69]  507 ms  EPODONIOS
+ [21/69]  549 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [22/69]    - ms  FAIL (curl_fail)  🇸🇬 Join+Telegram:@Farah_VPN 🇸🇬
+ [23/69]  506 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [24/69]  430 ms  EPODONIOS
+ [25/69]    - ms  FAIL (curl_fail)  EPODONIOS
+ [26/69] 1133 ms  рҹҮёрҹҮ¬SG-рҹҡҖ@VPNine1
+ [27/69]  364 ms  hamedp71::🇸🇬
+ [28/69]  325 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [29/69]  431 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [30/69]  409 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [31/69]    - ms  FAIL (curl_fail)  hamedp71::🇸🇬
+ [32/69]  364 ms  T.me/Vpn_Mafia рҹҮёрҹҮ¬
+ [33/69]  335 ms  🏳️ ShatakVPN 565400
+ [34/69]    - ms  FAIL (curl_fail)  hamedp71::🇸🇬
+ [35/69]  378 ms  EPODONIOS
+ [36/69]  246 ms  hamedp71::🇸🇬
+ [37/69]  373 ms  hamedp71::🏴‍☠️
+ [38/69]  380 ms  🇸🇬 سنگاپور | https://t.me/FREECONFIGSPLUS ✨
+ [39/69]    - ms  FAIL (xray_dead)  EPODONIOS
+ [40/69]  373 ms  ж–°еҠ еқЎ
+ [41/69]  408 ms  hamedp71::🇸🇬
+ [42/69]  294 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [43/69]  274 ms  hamedp71::🇸🇬
+ [44/69]    - ms  FAIL (curl_fail)  @Begoo_VPN ВІвҒ¶Ві
+ [45/69]  272 ms  hamedp71::🇸🇬
+ [46/69]  381 ms  @v2rayng3
+ [47/69]    - ms  FAIL (xray_dead)  EPODONIOS
+ [48/69]  315 ms  hamedp71::🇸🇬
+ [49/69]  276 ms  🇸🇬 344 - SG - VLESS/REALITY/PBK/SID/VISION/UTLS - 4321
+ [50/69]  306 ms  🇸🇬SG-🚀@VPNine1
+ [51/69]  295 ms  EPODONIOS
+ [52/69]  371 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [53/69]  306 ms  hamedp71::🇸🇬
+ [54/69]  394 ms  🏳️ ShatakVPN 703464
+ [55/69]  311 ms  🇸🇬 SG | VLESS | @freeconfigsplus #1 [fast]
+ [56/69]    - ms  FAIL (curl_fail)  hamedp71::🇸🇬
+ [57/69]  433 ms  рҹҮёрҹҮ¬SG
+ [58/69]  687 ms  рҹҡҖt.me/iProxyChannel
+ [59/69]  740 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [60/69]    - ms  FAIL (curl_fail)  рҹҡҖt.me/iProxyChannel
+ [61/69]  539 ms  рҹҮёрҹҮ¬SG
+ [62/69]  349 ms  hamedp71::🇸🇬
+ [63/69]  389 ms  рҹҮёрҹҮ¬SG-рҹҡҖ@VPNine1
+ [64/69]  528 ms  EPODONIOS
+ [65/69]  437 ms  рҹҮёрҹҮ¬SG-рҹҡҖ@VPNine1
+ [66/69]    - ms  FAIL (curl_fail)  🇸🇬 Join+Telegram:@Farah_VPN 🇸🇬
+ [67/69]  373 ms  🇸🇬 428 - SG - VLESS/WS - 48140
+ [68/69]    - ms  FAIL (curl_fail)  EPODONIOS
+ [69/69]    - ms  FAIL (curl_fail)  🇸🇬SG
+
+Working: 54 / 69
+#profile-title: 4:14 PM Updated
+Wrote servers  (🇸🇬 SG 1 = fastest)
+[main 9c8da24] Auto update: Wed Aug 19 16:14:35 +0630 2026
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+To https://github.com/paingnyinyikhant/virtualprivate.git
+   6991ff3..9c8da24  main -> main
+xray: /data/data/com.termux/files/usr/bin/xray | workers=3 | timeout=5s
+Fetching configs...
+Nodes: 69
+=== Real Delay (parallel, safe) ===
+ [1/69] 1368 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [2/69] 1009 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [3/69]    - ms  FAIL (xray_dead)  🇸🇬 Join+Telegram:@Farah_VPN 🇸🇬
+ [4/69]  543 ms  hamedp71::🇸🇬
+ [5/69]  683 ms  hamedp71::🇸🇬
+ [6/69]    - ms  FAIL (xray_dead)  рҹҮёрҹҮ¬SG-рҹҡҖ@VPNine1
+ [7/69]    - ms  FAIL (curl_fail)  EPODONIOS
+ [8/69] 1580 ms  рҹҮЁрҹҮҰ Join+Telegram:@Farah_VPN рҹҮЁрҹҮҰ
+ [9/69] 1030 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [10/69]  944 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [11/69]  669 ms  >>@freeland8::SG
+ [12/69]  437 ms  hamedp71::🇸🇬
+ [13/69]    - ms  FAIL (tcp_closed)  hamedp71::🇸🇬
+ [14/69]    - ms  FAIL (curl_fail)  EPODONIOS
+ [15/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [16/69]    - ms  FAIL (curl_fail)  hamedp71::🏴‍☠️
+ [17/69]  942 ms  EPODONIOS
+ [18/69]    - ms  FAIL (curl_fail)  🇸🇬 Join+Telegram:@Farah_VPN 🇸🇬
+ [19/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [20/69]    - ms  FAIL (tcp_closed)  EPODONIOS
+ [21/69]    - ms  FAIL (curl_fail)  🔥Join+Telegram:@Farah_VPN🟣
+ [22/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [23/69]    - ms  FAIL (tcp_closed)  hamedp71::🇸🇬
+ [24/69]    - ms  FAIL (xray_dead)  🔥Join+Telegram:@Farah_VPN🟣
+ [25/69]    - ms  FAIL (curl_fail)  🔥Join+Telegram:@Farah_VPN🟣
+ [26/69]    - ms  FAIL (tcp_closed)  hamedp71::🇸🇬
+ [27/69]    - ms  FAIL (tcp_closed)  EPODONIOS
+ [28/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [29/69]  756 ms  hamedp71::🇸🇬
+ [30/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [31/69]    - ms  FAIL (tcp_closed)  T.me/Vpn_Mafia рҹҮёрҹҮ¬
+ [32/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [33/69]    - ms  FAIL (xray_dead)  рҹҮёрҹҮ¬SG-рҹҡҖ@VPNine1
+ [34/69]    - ms  FAIL (tcp_closed)  EPODONIOS
+ [35/69]    - ms  FAIL (tcp_closed)  @Begoo_VPN ВІвҒ¶Ві
+ [36/69]    - ms  FAIL (xray_dead)  EPODONIOS
+ [37/69]    - ms  FAIL (curl_fail)  🏳️ ShatakVPN 565400
+ [38/69]  457 ms  hamedp71::🏴‍☠️
+ [39/69]  777 ms  ж–°еҠ еқЎ
+ [40/69]    - ms  FAIL (curl_fail)  hamedp71::🇸🇬
+ [41/69]  265 ms  hamedp71::🇸🇬
+ [42/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [43/69]    - ms  FAIL (xray_dead)  EPODONIOS
+ [44/69]    - ms  FAIL (curl_fail)  hamedp71::🇸🇬
+ [45/69]    - ms  FAIL (curl_fail)  hamedp71::🇸🇬
+ [46/69]    - ms  FAIL (tcp_closed)  @v2rayng3
+ [47/69]    - ms  FAIL (curl_fail)  hamedp71::🇸🇬
+ [48/69]    - ms  FAIL (tcp_closed)  рҹҡҖt.me/iProxyChannel
+ [49/69]    - ms  FAIL (tcp_closed)  🇸🇬 344 - SG - VLESS/REALITY/PBK/SID/VISION/UTLS - 4321
+ [50/69]  402 ms  hamedp71::🇸🇬
+ [51/69]    - ms  FAIL (tcp_closed)  🇸🇬SG-🚀@VPNine1
+ [52/69]    - ms  FAIL (tcp_closed)  EPODONIOS
+ [53/69]  924 ms  hamedp71::🇸🇬
+ [54/69] 2140 ms  🔥Join+Telegram:@Farah_VPN🟣
+ [55/69]    - ms  FAIL (tcp_closed)  🏳️ ShatakVPN 703464
+ [56/69]    - ms  FAIL (curl_fail)  рҹҮёрҹҮ¬SG
+ [57/69]    - ms  FAIL (curl_fail)  🇸🇬 Join+Telegram:@Farah_VPN 🇸🇬
+ [58/69]    - ms  FAIL (tcp_closed)  рҹҡҖt.me/iProxyChannel
+ [59/69]    - ms  FAIL (curl_fail)  🇸🇬 SG | VLESS | @freeconfigsplus #1 [fast]
+ [60/69]    - ms  FAIL (tcp_closed)  🔥Join+Telegram:@Farah_VPN🟣
+ [61/69]    - ms  FAIL (tcp_closed)  EPODONIOS
+ [62/69]  409 ms  hamedp71::🇸🇬
+ [63/69]    - ms  FAIL (tcp_closed)  рҹҮёрҹҮ¬SG
+ [64/69]    - ms  FAIL (tcp_closed)  🇸🇬 سنگاپور | https://t.me/FREECONFIGSPLUS ✨
+ [65/69]    - ms  FAIL (tcp_closed)  рҹҮёрҹҮ¬SG-рҹҡҖ@VPNine1
+ [66/69]    - ms  FAIL (tcp_closed)  🇸🇬 428 - SG - VLESS/WS - 48140
+ [67/69]    - ms  FAIL (curl_fail)  EPODONIOS
+ [68/69]    - ms  FAIL (curl_fail)  рҹҮёрҹҮ¬SG-рҹҡҖ@VPNine1
+ [69/69]    - ms  FAIL (tcp_closed)  🇸🇬SG
+
+Working: 18 / 69
+#profile-title: 4:16 PM Updated
+Wrote servers  (🇸🇬 SG 1 = fastest)
+[main fa4a162] Auto update: Wed Aug 19 16:16:44 +0630 2026
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+To https://github.com/paingnyinyikhant/virtualprivate.git
+   9c8da24..fa4a162  main -> main
+xray: /data/data/com.termux/files/usr/bin/xray | workers=3 | timeout=5s
+Fetching configs...
+Fetch error: ('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer'))
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	cron.log
+
+nothing added to commit but untracked files present (use "git add" to track)
+Everything up-to-date
