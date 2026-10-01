@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-V2Ray Auto Tester — GitHub Actions (Hourly)
-- Multi-source fetch (base64 + plain, auto-detect)
-- GeoIP pre-filter (SG/US/JP/TH/HK)
-- Real-delay test via xray + curl
-- Output: single file `servers` (base64 subscription)
+V2Ray Auto Tester — GitHub Actions (Hourly, Fast)
+- Only 5 countries: SG, US, JP, TH, HK
+- Top 10 per country = 50 nodes
+- Node name: <flag> <Country> <n>   (no ping)
+- Profile title: <D-Mon-YYYY H:MM AM/PM> Updated  (GMT+6:30)
+- Output: single file `servers`
 """
 import os
 import sys
@@ -22,18 +23,26 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
 
 # ==================== SETTINGS ====================
-TOP_COUNT = 30
-ALLOWED_COUNTRIES = {"SG", "US", "JP", "TH", "HK"}
+TOP_PER_COUNTRY = 10
+ALLOWED_COUNTRIES = ["SG", "US", "JP", "TH", "HK"]
+
 TEST_URL = "https://www.gstatic.com/generate_204"
 BASE_PORT = 10808
-WORKERS = 16
-TIMEOUT_SEC = 5
-TCP_PRECHECK = 1.5
+WORKERS = 32
+DNS_WORKERS = 200
+TIMEOUT_SEC = 3
+TCP_PRECHECK = 1.0
+XRAY_WAIT = 1.5
 DEBUG = False
 
-# ✅ Working sources (verified)
+# GMT+6:30 (Yangon)
+TZ_OFFSET = datetime.timedelta(hours=6, minutes=30)
+
 SOURCE_URLS = [
     "https://raw.githubusercontent.com/hamedcode/port-based-v2ray-configs/main/sub/vless.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt",
@@ -53,19 +62,30 @@ SS_METHOD_ALIAS = {
 }
 
 COUNTRY_NAMES = {
-    "SG": "Singapore", "US": "United States", "JP": "Japan",
-    "TH": "Thailand", "HK": "Hong Kong", "VN": "Vietnam",
-    "KR": "Korea", "TW": "Taiwan", "IN": "India", "DE": "Germany",
-    "FR": "France", "NL": "Netherlands", "GB": "United Kingdom",
-    "CA": "Canada", "AU": "Australia", "MY": "Malaysia",
-    "ID": "Indonesia", "PH": "Philippines", "CN": "China",
+    "SG": "Singapore",
+    "US": "United States",
+    "JP": "Japan",
+    "TH": "Thailand",
+    "HK": "Hong Kong",
 }
 
 
-# ==================== COLORS ====================
 class C:
     RESET = "\033[0m"; BOLD = "\033[1m"; DIM = "\033[2m"
     RED = "\033[31m"; GREEN = "\033[32m"; YELLOW = "\033[33m"; CYAN = "\033[36m"
+
+
+# ==================== HTTP SESSION ====================
+def make_session():
+    s = requests.Session()
+    retries = Retry(total=2, backoff_factor=0.2,
+                    status_forcelist=[500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retries, pool_connections=32, pool_maxsize=32)
+    s.mount("http://", adapter)
+    s.mount("https://", adapter)
+    return s
+
+SESSION = make_session()
 
 
 # ==================== HELPERS ====================
@@ -77,12 +97,9 @@ def find_xray():
         w = shutil.which(name)
         if w:
             return w
-    for cand in (
-        os.path.expanduser("~/xray-bin/xray"),
-        os.path.expanduser("~/bin/xray"),
-        "/usr/local/bin/xray",
-        "./xray",
-    ):
+    for cand in (os.path.expanduser("~/xray-bin/xray"),
+                 os.path.expanduser("~/bin/xray"),
+                 "/usr/local/bin/xray", "./xray"):
         if os.path.isfile(cand) and os.access(cand, os.X_OK):
             return cand
     return None
@@ -99,45 +116,11 @@ def get_flag_emoji(cc):
 
 
 def _safe(v):
-    """Convert any value to a safe string (never crashes)."""
     if v is None:
         return ""
     if isinstance(v, bool):
         return "true" if v else "false"
     return str(v)
-
-
-def tcp_open(host, port, timeout=TCP_PRECHECK):
-    host = str(host).strip("[]")
-    try:
-        infos = socket.getaddrinfo(host, int(port), type=socket.SOCK_STREAM)
-    except OSError:
-        return False
-    for family, socktype, proto, _, addr in infos[:2]:
-        s = socket.socket(family, socktype, proto)
-        s.settimeout(timeout)
-        try:
-            s.connect(addr)
-            s.close()
-            return True
-        except OSError:
-            s.close()
-    return False
-
-
-def wait_port(port, timeout=3.0):
-    end = time.time() + timeout
-    while time.time() < end:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.1)
-        try:
-            s.connect(("127.0.0.1", port))
-            s.close()
-            return True
-        except OSError:
-            s.close()
-            time.sleep(0.05)
-    return False
 
 
 def _b64(s):
@@ -155,6 +138,20 @@ def _host_port(host_port, default=443):
         m = re.search(r"\d+", ps)
         return host, int(m.group()) if m else default
     return host_port, default
+
+
+def now_gmt630():
+    """Return datetime in GMT+6:30."""
+    return datetime.datetime.utcnow() + TZ_OFFSET
+
+
+def format_title():
+    """e.g. '1-Sep-2026 11:19 PM Updated'"""
+    t = now_gmt630()
+    # %-d works on Linux (GitHub runner is Linux)
+    date_str = t.strftime("%-d-%b-%Y")
+    time_str = t.strftime("%I:%M %p").lstrip("0")
+    return f"{date_str} {time_str} Updated"
 
 
 # ==================== PARSERS ====================
@@ -237,11 +234,8 @@ def parse_vmess(link):
         if "#" in raw:
             raw, remark = raw.split("#", 1)
             remark = urllib.parse.unquote(remark)
-
         data = json.loads(_b64(raw).decode("utf-8"))
         host = data.get("add") or data.get("addr") or ""
-
-        # ---- normalize tls (could be bool, str, or None) ----
         tls_raw = data.get("tls")
         if isinstance(tls_raw, bool):
             tls = "tls" if tls_raw else ""
@@ -289,42 +283,30 @@ def parse_link(link):
 
 
 def node_key(link):
-    """Build a dedupe key. Never raises."""
     try:
         p = parse_link(link)
         if not p:
             return link.split("#")[0].strip()
-
         if p["proto"] == "vless":
             q = p["query"]
             return "|".join([
-                "vless",
-                _safe(p.get("uuid")).lower(),
-                _safe(p.get("host")).lower(),
-                _safe(p.get("port")),
+                "vless", _safe(p.get("uuid")).lower(),
+                _safe(p.get("host")).lower(), _safe(p.get("port")),
                 _safe(q.get("type") or "tcp").lower(),
                 urllib.parse.unquote(_safe(q.get("path") or "/")),
                 _safe(q.get("security") or "none").lower(),
                 _safe(q.get("sni") or q.get("host") or "").lower(),
             ])
-
         if p["proto"] == "vmess":
             return "|".join([
-                "vmess",
-                _safe(p.get("uuid")).lower(),
-                _safe(p.get("host")).lower(),
-                _safe(p.get("port")),
-                _safe(p.get("net") or ""),
-                _safe(p.get("path") or ""),
+                "vmess", _safe(p.get("uuid")).lower(),
+                _safe(p.get("host")).lower(), _safe(p.get("port")),
+                _safe(p.get("net") or ""), _safe(p.get("path") or ""),
                 _safe(p.get("tls") or ""),
             ])
-
         return "|".join([
-            "ss",
-            _safe(p.get("host")).lower(),
-            _safe(p.get("port")),
-            _safe(p.get("method")).lower(),
-            _safe(p.get("password")),
+            "ss", _safe(p.get("host")).lower(), _safe(p.get("port")),
+            _safe(p.get("method")).lower(), _safe(p.get("password")),
             _safe(p.get("plugin") or ""),
         ])
     except Exception:
@@ -350,28 +332,19 @@ def dedupe_links(links):
 def create_xray_config(p, path, listen_port):
     if p.get("proto") == "shadowsocks":
         outbound = {
-            "tag": "proxy",
-            "protocol": "shadowsocks",
-            "settings": {
-                "servers": [{
-                    "address": p["host"],
-                    "port": int(p["port"]),
-                    "method": p["method"],
-                    "password": p["password"],
-                    "level": 0,
-                }]
-            },
+            "tag": "proxy", "protocol": "shadowsocks",
+            "settings": {"servers": [{
+                "address": p["host"], "port": int(p["port"]),
+                "method": p["method"], "password": p["password"], "level": 0,
+            }]},
         }
     elif p.get("proto") == "vmess":
         q = {
             "type": p.get("net") or "tcp",
             "security": "tls" if p.get("tls") in ("tls", "xtls") else (p.get("tls") or "none"),
-            "sni": p.get("sni"),
-            "host": p.get("host_header"),
-            "path": p.get("path") or "/",
-            "headerType": p.get("type") or "none",
-            "alpn": p.get("alpn") or "",
-            "fp": p.get("fp") or "chrome",
+            "sni": p.get("sni"), "host": p.get("host_header"),
+            "path": p.get("path") or "/", "headerType": p.get("type") or "none",
+            "alpn": p.get("alpn") or "", "fp": p.get("fp") or "chrome",
         }
         host, port, uuid = p["host"], int(p["port"]), p["uuid"]
         network, security = q["type"], q["security"]
@@ -386,26 +359,13 @@ def create_xray_config(p, path, listen_port):
         else:
             stream["tcpSettings"] = {"header": {"type": q.get("headerType", "none")}}
         if security == "tls":
-            stream["tlsSettings"] = {
-                "serverName": sni,
-                "allowInsecure": True,
-                "fingerprint": q.get("fp") or "chrome",
-            }
+            stream["tlsSettings"] = {"serverName": sni, "allowInsecure": True,
+                                     "fingerprint": q.get("fp") or "chrome"}
         outbound = {
-            "tag": "proxy",
-            "protocol": "vmess",
-            "settings": {
-                "vnext": [{
-                    "address": host,
-                    "port": port,
-                    "users": [{
-                        "id": uuid,
-                        "alterId": p.get("aid") or 0,
-                        "security": p.get("scy") or "auto",
-                        "level": 0,
-                    }],
-                }]
-            },
+            "tag": "proxy", "protocol": "vmess",
+            "settings": {"vnext": [{"address": host, "port": port,
+                "users": [{"id": uuid, "alterId": p.get("aid") or 0,
+                           "security": p.get("scy") or "auto", "level": 0}]}]},
             "streamSettings": stream,
         }
     else:  # vless
@@ -420,76 +380,84 @@ def create_xray_config(p, path, listen_port):
         if network == "ws":
             stream["wsSettings"] = {"path": raw_path, "headers": {"Host": header_host}}
         elif network == "grpc":
-            stream["grpcSettings"] = {
-                "serviceName": q.get("serviceName", ""),
-                "multiMode": q.get("mode") == "multi",
-            }
+            stream["grpcSettings"] = {"serviceName": q.get("serviceName", ""),
+                                      "multiMode": q.get("mode") == "multi"}
         elif network in ("xhttp", "splithttp"):
-            stream["xhttpSettings"] = {
-                "path": raw_path,
-                "host": header_host,
-                "mode": q.get("mode") or "auto",
-            }
+            stream["xhttpSettings"] = {"path": raw_path, "host": header_host,
+                                       "mode": q.get("mode") or "auto"}
         elif network == "tcp" and q.get("headerType") == "http":
-            stream["tcpSettings"] = {
-                "header": {
-                    "type": "http",
-                    "request": {
-                        "path": [raw_path],
-                        "headers": {"Host": [header_host]},
-                    },
-                }
-            }
+            stream["tcpSettings"] = {"header": {"type": "http",
+                "request": {"path": [raw_path], "headers": {"Host": [header_host]}}}}
         else:
             stream["tcpSettings"] = {"header": {"type": q.get("headerType", "none")}}
-
         if security == "tls":
-            tls = {
-                "serverName": sni,
-                "allowInsecure": q.get("allowInsecure", "0") in ("1", "true", "True"),
-                "fingerprint": q.get("fp") or "chrome",
-            }
+            tls = {"serverName": sni,
+                   "allowInsecure": q.get("allowInsecure", "0") in ("1", "true", "True"),
+                   "fingerprint": q.get("fp") or "chrome"}
             alpn = q.get("alpn", "")
             if alpn:
                 tls["alpn"] = [x.strip() for x in urllib.parse.unquote(alpn).split(",") if x.strip()]
             stream["tlsSettings"] = tls
         elif security == "reality":
             stream["realitySettings"] = {
-                "serverName": sni,
-                "fingerprint": q.get("fp") or "chrome",
-                "publicKey": q.get("pbk", ""),
-                "shortId": q.get("sid", ""),
+                "serverName": sni, "fingerprint": q.get("fp") or "chrome",
+                "publicKey": q.get("pbk", ""), "shortId": q.get("sid", ""),
                 "spiderX": urllib.parse.unquote(q.get("spx", "/")) or "/",
             }
-
         user = {"id": uuid, "encryption": q.get("encryption") or "none", "level": 0}
         if q.get("flow"):
             user["flow"] = q["flow"]
-
         outbound = {
-            "tag": "proxy",
-            "protocol": "vless",
+            "tag": "proxy", "protocol": "vless",
             "settings": {"vnext": [{"address": host, "port": port, "users": [user]}]},
             "streamSettings": stream,
         }
 
     config = {
         "log": {"loglevel": "none"},
-        "inbounds": [{
-            "tag": "socks",
-            "port": listen_port,
-            "listen": "127.0.0.1",
-            "protocol": "socks",
-            "settings": {"auth": "noauth", "udp": True},
-        }],
+        "inbounds": [{"tag": "socks", "port": listen_port, "listen": "127.0.0.1",
+                      "protocol": "socks",
+                      "settings": {"auth": "noauth", "udp": False}}],
         "outbounds": [outbound],
     }
-
     with open(path, "w") as f:
         json.dump(config, f)
 
 
-# ==================== DELAY TEST ====================
+# ==================== NETWORK ====================
+def tcp_open(host, port, timeout=TCP_PRECHECK):
+    host = str(host).strip("[]")
+    try:
+        infos = socket.getaddrinfo(host, int(port), type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    for family, socktype, proto, _, addr in infos[:1]:
+        s = socket.socket(family, socktype, proto)
+        s.settimeout(timeout)
+        try:
+            s.connect(addr)
+            s.close()
+            return True
+        except OSError:
+            s.close()
+    return False
+
+
+def wait_port(port, timeout=XRAY_WAIT):
+    end = time.time() + timeout
+    while time.time() < end:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.05)
+        try:
+            s.connect(("127.0.0.1", port))
+            s.close()
+            return True
+        except OSError:
+            s.close()
+            time.sleep(0.03)
+    return False
+
+
 def curl_real_delay(url, listen_port):
     curl = shutil.which("curl") or "/usr/bin/curl"
     cmd = [
@@ -501,7 +469,8 @@ def curl_real_delay(url, listen_port):
         url,
     ]
     try:
-        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=TIMEOUT_SEC + 1)
+        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL,
+                                      timeout=TIMEOUT_SEC + 1)
         text = out.decode("utf-8", "replace").strip().split()
         code, ttfb = int(text[0]), float(text[1])
         if code in (200, 204):
@@ -541,11 +510,9 @@ def test_one(link_data, xray_bin, port_q):
 
         proc = subprocess.Popen(
             [xray_bin, "run", "-c", os.path.abspath(cfg_path)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
         )
-        if not wait_port(listen_port, 3.0):
+        if not wait_port(listen_port, XRAY_WAIT):
             return None, "xray_dead", parsed, link, cc
 
         delay, reason = curl_real_delay(TEST_URL, listen_port)
@@ -556,7 +523,7 @@ def test_one(link_data, xray_bin, port_q):
         if proc and proc.poll() is None:
             proc.terminate()
             try:
-                proc.wait(timeout=1.2)
+                proc.wait(timeout=0.8)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
@@ -578,12 +545,15 @@ def fmt_bar(done, total, width=28):
 def main():
     xray_bin = find_xray()
     if not xray_bin:
-        print(f"{C.RED}❌ xray not found. Set XRAY_BIN.{C.RESET}")
+        print(f"{C.RED}❌ xray not found.{C.RESET}")
         sys.exit(1)
 
+    title = format_title()
     print(f"{C.CYAN}xray:{C.RESET} {xray_bin}")
-    print(f"{C.CYAN}workers:{C.RESET} {WORKERS}  {C.CYAN}TOP:{C.RESET} {TOP_COUNT}")
-    print(f"{C.CYAN}🎯 Target:{C.RESET} {', '.join(sorted(ALLOWED_COUNTRIES))}")
+    print(f"{C.CYAN}workers:{C.RESET} {WORKERS}  "
+          f"{C.CYAN}TOP/country:{C.RESET} {TOP_PER_COUNTRY}")
+    print(f"{C.CYAN}🎯 Countries:{C.RESET} {', '.join(ALLOWED_COUNTRIES)}")
+    print(f"{C.CYAN}🕒 Title:{C.RESET} {title}")
 
     # ---------- Fetch ----------
     print(f"\n{C.BOLD}Fetching from {len(SOURCE_URLS)} sources...{C.RESET}")
@@ -591,7 +561,7 @@ def main():
 
     def fetch(url):
         try:
-            r = requests.get(url, timeout=20)
+            r = SESSION.get(url, timeout=15)
             r.raise_for_status()
             return url, r.text, None
         except Exception as e:
@@ -602,8 +572,6 @@ def main():
             if err:
                 print(f"  {C.RED}✗ {url[:70]} → {err}{C.RESET}")
                 continue
-
-            # Auto-detect base64 vs plain
             decoded = text
             s = text.strip()
             if "://" not in s[:200] and " " not in s[:200]:
@@ -615,7 +583,6 @@ def main():
                             decoded = cand
                 except Exception:
                     pass
-
             n = 0
             for ln in decoded.splitlines():
                 ln = ln.strip()
@@ -634,22 +601,22 @@ def main():
     lines, dropped = dedupe_links(raw_lines)
     print(f"{C.GREEN}Unique: {len(lines)}{C.RESET} {C.DIM}(dropped {dropped}){C.RESET}")
 
-    # ---------- Pre-filter ----------
-    print(f"\n{C.BOLD}=== GeoIP Pre-filter ==={C.RESET}")
+    # ---------- Parse ----------
+    print(f"\n{C.BOLD}=== Parse + DNS + GeoIP ==={C.RESET}")
     link_parsed, hosts = [], set()
     for ln in lines:
         p = parse_link(ln)
         if p and p.get("host"):
             link_parsed.append((ln, p))
             hosts.add(p["host"])
-
     print(f"  Parsed: {C.GREEN}{len(link_parsed)}{C.RESET}  "
-          f"Hosts: {C.CYAN}{len(hosts)}{C.RESET}")
+          f"Unique hosts: {C.CYAN}{len(hosts)}{C.RESET}")
 
     if not hosts:
-        print(f"{C.RED}❌ No hosts parsed.{C.RESET}")
+        print(f"{C.RED}❌ No hosts.{C.RESET}")
         sys.exit(1)
 
+    # ---------- DNS ----------
     host_ip = {}
 
     def resolve(h):
@@ -658,14 +625,15 @@ def main():
         except Exception:
             return h, None
 
-    print(f"  {C.YELLOW}⏳ DNS...{C.RESET}")
+    print(f"  {C.YELLOW}⏳ DNS ({len(hosts)} hosts)...{C.RESET}")
     t0 = time.time()
-    with ThreadPoolExecutor(max_workers=100) as pool:
+    with ThreadPoolExecutor(max_workers=DNS_WORKERS) as pool:
         for h, ip in pool.map(resolve, hosts):
             if ip:
                 host_ip[h] = ip
     print(f"  {C.GREEN}✓ DNS done{C.RESET} {time.time()-t0:.1f}s ({len(host_ip)})")
 
+    # ---------- GeoIP ----------
     uniq_ips = list(set(host_ip.values()))
     ip_cc = {}
     print(f"  {C.YELLOW}⏳ GeoIP ({len(uniq_ips)} IPs)...{C.RESET}")
@@ -673,18 +641,19 @@ def main():
     for i in range(0, len(uniq_ips), 100):
         chunk = uniq_ips[i:i+100]
         try:
-            r = requests.post(
+            r = SESSION.post(
                 "http://ip-api.com/batch?fields=status,countryCode,query",
-                json=[{"query": ip} for ip in chunk],
-                timeout=10,
+                json=[{"query": ip} for ip in chunk], timeout=8,
             ).json()
             for item in r:
                 if item.get("status") == "success":
                     ip_cc[item["query"]] = item.get("countryCode", "").upper()
         except Exception as e:
-            print(f"    {C.RED}GeoIP chunk: {e}{C.RESET}")
+            print(f"    {C.RED}GeoIP: {e}{C.RESET}")
     print(f"  {C.GREEN}✓ GeoIP done{C.RESET} {time.time()-t0:.1f}s")
 
+    # ---------- Filter 5 countries only ----------
+    per_country_count = {cc: 0 for cc in ALLOWED_COUNTRIES}
     filtered = []
     for ln, p in link_parsed:
         ip = host_ip.get(p["host"])
@@ -693,20 +662,46 @@ def main():
         cc = ip_cc.get(ip, "")
         if cc in ALLOWED_COUNTRIES:
             filtered.append((ln, p, cc))
+            per_country_count[cc] += 1
 
-    print(f"\n{C.BOLD}{C.GREEN}🎯 Target: {len(filtered)} / {len(lines)}{C.RESET}\n")
+    print(f"\n{C.BOLD}{C.GREEN}🎯 Target: {len(filtered)} / {len(lines)}{C.RESET}")
+    for cc in ALLOWED_COUNTRIES:
+        flag = get_flag_emoji(cc)
+        print(f"    {flag} {cc}: {per_country_count[cc]} nodes")
+    print()
 
     if not filtered:
         print(f"{C.RED}No matching nodes.{C.RESET}")
         sys.exit(1)
 
-    # ---------- Test ----------
+    # ---------- TCP pre-check ----------
+    print(f"{C.BOLD}=== TCP pre-check ==={C.RESET}")
+    t0 = time.time()
+
+    def precheck(item):
+        _, p, _ = item
+        return item, tcp_open(p["host"], p["port"])
+
+    alive = []
+    with ThreadPoolExecutor(max_workers=100) as pool:
+        for item, ok in pool.map(precheck, filtered):
+            if ok:
+                alive.append(item)
+
+    print(f"  {C.GREEN}Alive: {len(alive)}{C.RESET} / {len(filtered)}  "
+          f"{C.DIM}({time.time()-t0:.1f}s){C.RESET}\n")
+
+    if not alive:
+        print(f"{C.RED}No reachable hosts.{C.RESET}")
+        sys.exit(1)
+
+    # ---------- Real test ----------
     print(f"{C.BOLD}=== Real Internet Test ==={C.RESET}\n")
     port_q = queue.Queue()
     for i in range(WORKERS):
         port_q.put(BASE_PORT + i)
 
-    total = len(filtered)
+    total = len(alive)
     state = {"done": 0, "online": 0}
     results = []
     fails = {}
@@ -714,28 +709,27 @@ def main():
     lock = threading.Lock()
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        futs = {pool.submit(test_one, item, xray_bin, port_q): item for item in filtered}
+        futs = {pool.submit(test_one, item, xray_bin, port_q): item for item in alive}
         for fut in as_completed(futs):
             delay, reason, parsed, link, cc = fut.result()
             with lock:
                 state["done"] += 1
                 done = state["done"]
-
                 if delay is not None:
                     state["online"] += 1
                     flag = get_flag_emoji(cc)
                     results.append((delay, link, cc, flag, parsed))
                     bar = fmt_bar(done, total)
-                    print(f"{bar} {done:>3}/{total}  "
+                    print(f"{bar} {done:>4}/{total}  "
                           f"{C.GREEN}✓ {delay:>4}ms{C.RESET}  "
                           f"{flag} {cc:<2}  "
                           f"{C.DIM}{parsed['host']}:{parsed['port']}{C.RESET}",
                           flush=True)
                 else:
                     fails[reason] = fails.get(reason, 0) + 1
-                    if done % 20 == 0 or DEBUG:
+                    if done % 25 == 0 or DEBUG:
                         bar = fmt_bar(done, total)
-                        print(f"{bar} {done:>3}/{total}  "
+                        print(f"{bar} {done:>4}/{total}  "
                               f"{C.RED}✗ {reason}{C.RESET}  "
                               f"{C.DIM}{parsed['host']}:{parsed['port']}{C.RESET}",
                               flush=True)
@@ -755,24 +749,45 @@ def main():
         print(f"\n{C.RED}❌ No ONLINE nodes.{C.RESET}")
         sys.exit(1)
 
-    # ---------- Write single `servers` file ----------
-    results.sort(key=lambda x: x[0])
-    top = results[:TOP_COUNT]
+    # ---------- Group + Top N per country ----------
+    buckets = {cc: [] for cc in ALLOWED_COUNTRIES}
+    for delay, link, cc, flag, parsed in results:
+        if cc in buckets:
+            buckets[cc].append((delay, link, cc, flag, parsed))
 
-    now = datetime.datetime.utcnow().strftime("%d-%b-%Y %H:%M UTC")
-    out = [f"#profile-title: Main {now} ({len(top)} nodes)"]
+    print(f"\n{C.BOLD}=== Per-Country Top {TOP_PER_COUNTRY} ==={C.RESET}")
+    picked = []
+    for cc in ALLOWED_COUNTRIES:
+        bucket = sorted(buckets.get(cc, []), key=lambda x: x[0])
+        top = bucket[:TOP_PER_COUNTRY]
+        flag = get_flag_emoji(cc)
+        if top:
+            print(f"  {flag} {cc:<2} : {len(top):>2} nodes  "
+                  f"{C.DIM}(best {top[0][0]}ms){C.RESET}")
+        else:
+            print(f"  {flag} {cc:<2} : {C.RED}0 nodes{C.RESET}")
+        picked.extend(top)
+
+    if not picked:
+        print(f"\n{C.RED}❌ No nodes selected.{C.RESET}")
+        sys.exit(1)
+
+    # ---------- Write `servers` ----------
+    # Node name: <flag> <Country> <n>   (NO ping)
+    out = [f"#profile-title: {title}"]
 
     counter = {}
-    for delay, link, cc, flag, _ in top:
+    for delay, link, cc, flag, _ in picked:
         counter[cc] = counter.get(cc, 0) + 1
-        name = f"{flag} {COUNTRY_NAMES.get(cc, cc)} {counter[cc]} - {delay}ms"
+        name = f"{flag} {COUNTRY_NAMES.get(cc, cc)} {counter[cc]}"
         base = link.split("#")[0]
         out.append(f"{base}#{urllib.parse.quote(name)}")
 
     with open("servers", "w") as f:
         f.write(base64.b64encode("\n".join(out).encode()).decode())
 
-    print(f"\n{C.GREEN}✅ servers : {len(top)} nodes written{C.RESET}")
+    print(f"\n{C.GREEN}✅ servers : {len(picked)} nodes written{C.RESET}")
+    print(f"{C.DIM}   Title: {title}{C.RESET}")
 
 
 if __name__ == "__main__":
