@@ -2,7 +2,7 @@ name: Auto Update Servers
 
 on:
   schedule:
-    - cron: '0 * * * *'        # hourly
+    - cron: '17 * * * *'        # hourly
   workflow_dispatch:
 
 permissions:
