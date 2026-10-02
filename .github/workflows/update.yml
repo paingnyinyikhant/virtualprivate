@@ -214,5 +214,5 @@ jobs:
         continue-on-error: true
         run: |
           curl -sf -A "Mozilla/5.0" --max-time 15 \
-            "https://mm.virtualalpha.casacam.net/sync/1aa09056548d8bec0e891327c1208531d4d9b403ba19c9bf?force=1" \
+            "https://mm.virtualalpha.casacam.net/api/cron/sync?key=1aa09056548d8bec0e891327c1208531d4d9b403ba19c9bf" \
             && echo "✓ Sync triggered" || echo "⚠ Sync failed"
