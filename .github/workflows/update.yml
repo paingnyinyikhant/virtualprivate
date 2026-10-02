@@ -2,8 +2,17 @@ name: Auto Update Servers
 
 on:
   schedule:
-    - cron: '17 * * * *'        # hourly
+    - cron: '17 * * * *'        # ⭐ Backup (Cloudflare primary)
   workflow_dispatch:
+    inputs:
+      triggered_by:
+        description: 'Who triggered'
+        required: false
+        default: 'manual'
+      triggered_at:
+        description: 'Timestamp'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -18,22 +27,64 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      # ⭐ Backup run ဖြစ်ရင် — Cloudflare trigger နီးနေရင် skip
+      - name: Check if recent Cloudflare run exists
+        id: guard
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "skip=false" >> $GITHUB_OUTPUT
+
+          # Latest workflow_dispatch run ကို စစ်
+          DATA=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/update.yml/runs?per_page=20")
+
+          # workflow_dispatch event ဖြစ်တဲ့ run တွေထဲ နောက်ဆုံး
+          LAST=$(echo "$DATA" | jq -r '[.workflow_runs[] | select(.event == "workflow_dispatch")][0].updated_at // empty')
+
+          if [ -z "$LAST" ] || [ "$LAST" = "null" ]; then
+            echo "ℹ️  No prior Cloudflare run. Proceeding."
+            exit 0
+          fi
+
+          LAST_EPOCH=$(date -d "$LAST" +%s)
+          NOW_EPOCH=$(date +%s)
+          DIFF_MIN=$(( (NOW_EPOCH - LAST_EPOCH) / 60 ))
+
+          echo "Last Cloudflare run: $LAST (${DIFF_MIN} min ago)"
+
+          if [ $DIFF_MIN -lt 40 ]; then
+            echo "⏭  Cloudflare ran ${DIFF_MIN}min ago. Skipping backup."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip notice
+        if: steps.guard.outputs.skip == 'true'
+        run: |
+          echo "✅ Skipped — Cloudflare already ran within 40 min"
+
       - name: Checkout
+        if: steps.guard.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Setup Python
+        if: steps.guard.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install deps
+        if: steps.guard.outputs.skip != 'true'
         run: |
           python -m pip install --upgrade pip
           pip install requests
 
       - name: Download Xray-core
+        if: steps.guard.outputs.skip != 'true'
         run: |
           set -e
           mkdir -p $HOME/xray-bin
@@ -43,12 +94,21 @@ jobs:
           echo "$HOME/xray-bin" >> $GITHUB_PATH
 
       - name: Run tester
+        if: steps.guard.outputs.skip != 'true'
         env:
           XRAY_BIN: /home/runner/xray-bin/xray
           XRAY_LOCATION_ASSET: /home/runner/xray-bin
         run: python scripts/fetch_servers.py
 
+      - name: Show result
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          echo "=== servers ==="
+          wc -c servers 2>/dev/null || echo "missing"
+          base64 -d servers 2>/dev/null | head -3 || true
+
       - name: Commit & push
+        if: steps.guard.outputs.skip != 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -60,8 +120,8 @@ jobs:
             git push
           fi
 
-      - name: Trigger sync
-        if: success()
+      - name: Trigger external sync
+        if: steps.guard.outputs.skip != 'true' && success()
         continue-on-error: true
         run: |
           curl -sf -A "Mozilla/5.0" --max-time 15 \
