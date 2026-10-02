@@ -2,15 +2,15 @@ name: Auto Update Servers
 
 on:
   schedule:
-    - cron: '17 * * * *'        # ⭐ Backup (Cloudflare primary)
+    - cron: '17 * * * *'        # backup (Cloudflare primary)
   workflow_dispatch:
     inputs:
       triggered_by:
-        description: 'Who triggered'
+        description: 'Who triggered this run'
         required: false
         default: 'manual'
       triggered_at:
-        description: 'Timestamp'
+        description: 'Trigger timestamp'
         required: false
         default: ''
 
@@ -24,11 +24,11 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
-      # ⭐ Backup run ဖြစ်ရင် — Cloudflare trigger နီးနေရင် skip
-      - name: Check if recent Cloudflare run exists
+      # ==================== BACKUP GUARD ====================
+      - name: Backup guard — skip if Cloudflare ran recently
         id: guard
         if: github.event_name == 'schedule'
         env:
@@ -36,12 +36,10 @@ jobs:
         run: |
           echo "skip=false" >> $GITHUB_OUTPUT
 
-          # Latest workflow_dispatch run ကို စစ်
           DATA=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/update.yml/runs?per_page=20")
 
-          # workflow_dispatch event ဖြစ်တဲ့ run တွေထဲ နောက်ဆုံး
           LAST=$(echo "$DATA" | jq -r '[.workflow_runs[] | select(.event == "workflow_dispatch")][0].updated_at // empty')
 
           if [ -z "$LAST" ] || [ "$LAST" = "null" ]; then
@@ -62,15 +60,25 @@ jobs:
 
       - name: Skip notice
         if: steps.guard.outputs.skip == 'true'
-        run: |
-          echo "✅ Skipped — Cloudflare already ran within 40 min"
+        run: echo "✅ Skipped — Cloudflare already ran within 40 min"
 
+      # ==================== TRIGGER INFO ====================
+      - name: Trigger info
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          echo "Triggered by: ${{ github.event.inputs.triggered_by || 'schedule' }}"
+          echo "Triggered at: ${{ github.event.inputs.triggered_at || 'n/a' }}"
+          echo "Event:        ${{ github.event_name }}"
+          echo "Runner:       ${{ runner.os }} ${{ runner.arch }}"
+
+      # ==================== CHECKOUT ====================
       - name: Checkout
         if: steps.guard.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
+      # ==================== PYTHON SETUP ====================
       - name: Setup Python
         if: steps.guard.outputs.skip != 'true'
         uses: actions/setup-python@v5
@@ -83,43 +91,124 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
+      # ==================== XRAY DOWNLOAD ====================
       - name: Download Xray-core
         if: steps.guard.outputs.skip != 'true'
         run: |
-          set -e
+          set -euxo pipefail
           mkdir -p $HOME/xray-bin
-          curl -sSL "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip" -o /tmp/xray.zip
+
+          echo "════════════════════════════════════════"
+          echo "Downloading Xray-linux-64.zip"
+          echo "════════════════════════════════════════"
+
+          URL="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
+
+          if ! curl -fSL \
+              --connect-timeout 15 \
+              --max-time 180 \
+              --retry 3 \
+              --retry-delay 5 \
+              --retry-all-errors \
+              -o /tmp/xray.zip "$URL"; then
+            echo "❌ curl failed"
+            exit 1
+          fi
+
+          echo "Download complete:"
+          ls -la /tmp/xray.zip
+
+          # Verify it's a valid zip
+          if ! unzip -t /tmp/xray.zip >/dev/null 2>&1; then
+            echo "❌ Invalid zip file"
+            file /tmp/xray.zip
+            exit 1
+          fi
+
+          echo "Extracting..."
           unzip -oq /tmp/xray.zip -d $HOME/xray-bin/
+
+          echo "Extracted files:"
+          ls -la $HOME/xray-bin/
+
           chmod +x $HOME/xray-bin/xray
+
+          # Verify binary works
+          if ! $HOME/xray-bin/xray version 2>&1 | head -3; then
+            echo "❌ Xray binary can't run"
+            file $HOME/xray-bin/xray
+            exit 1
+          fi
+
+          echo "✓ Xray ready"
           echo "$HOME/xray-bin" >> $GITHUB_PATH
 
+      # ==================== VERIFY XRAY ====================
+      - name: Verify Xray binary
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          echo "=== Checking xray ==="
+          ls -la /home/runner/xray-bin/ || echo "directory missing"
+          if [ -x /home/runner/xray-bin/xray ]; then
+            echo "✓ xray exists and is executable"
+            /home/runner/xray-bin/xray version 2>&1 | head -3
+          else
+            echo "❌ xray NOT found or not executable"
+            exit 1
+          fi
+
+      # ==================== RUN TESTER ====================
       - name: Run tester
         if: steps.guard.outputs.skip != 'true'
         env:
           XRAY_BIN: /home/runner/xray-bin/xray
           XRAY_LOCATION_ASSET: /home/runner/xray-bin
-        run: python scripts/fetch_servers.py
+          PYTHONUNBUFFERED: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          echo "=== Starting python tester ==="
+          python -u scripts/fetch_servers.py 2>&1
+          EXIT=$?
+          echo "=== Exit code: $EXIT ==="
+          exit $EXIT
 
-      - name: Show result
+      # ==================== VERIFY SERVERS FILE ====================
+      - name: Verify servers file
         if: steps.guard.outputs.skip != 'true'
         run: |
-          echo "=== servers ==="
-          wc -c servers 2>/dev/null || echo "missing"
-          base64 -d servers 2>/dev/null | head -3 || true
+          if [ ! -f servers ]; then
+            echo "❌ servers file not created!"
+            exit 1
+          fi
+          SIZE=$(wc -c < servers)
+          echo "servers size: $SIZE bytes"
+          if [ "$SIZE" -lt 100 ]; then
+            echo "❌ servers file too small (likely empty)"
+            exit 1
+          fi
+          echo "=== First 3 decoded lines ==="
+          base64 -d servers | head -3
 
+      # ==================== COMMIT & PUSH ====================
       - name: Commit & push
         if: steps.guard.outputs.skip != 'true'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add servers
+
+          git add -f servers
+
           if git diff --cached --quiet; then
-            echo "No changes."
+            echo "⚠️  No changes detected in servers file"
+            echo "    Force-committing to bump timestamp..."
+            git commit --allow-empty -m "Auto Update (no change): $(TZ=Asia/Yangon date +'%Y-%m-%d %H:%M:%S %Z')"
           else
             git commit -m "Auto Update: $(TZ=Asia/Yangon date +'%Y-%m-%d %H:%M:%S %Z')"
-            git push
           fi
 
+          git push
+
+      # ==================== TRIGGER SYNC ====================
       - name: Trigger external sync
         if: steps.guard.outputs.skip != 'true' && success()
         continue-on-error: true
