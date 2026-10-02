@@ -27,14 +27,12 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 
-# ==================== FORCE UNBUFFERED (GitHub Actions) ====================
 try:
     sys.stdout.reconfigure(line_buffering=True)
     sys.stderr.reconfigure(line_buffering=True)
 except Exception:
     pass
 
-# Print startup banner immediately (proves script is running)
 print("=" * 60, flush=True)
 print("V2Ray Auto Tester — starting", flush=True)
 print(f"Python: {sys.version}", flush=True)
@@ -90,7 +88,6 @@ class C:
     RED = "\033[31m"; GREEN = "\033[32m"; YELLOW = "\033[33m"; CYAN = "\033[36m"
 
 
-# ==================== HTTP SESSION ====================
 def make_session():
     s = requests.Session()
     retries = Retry(total=2, backoff_factor=0.2,
@@ -103,7 +100,6 @@ def make_session():
 SESSION = make_session()
 
 
-# ==================== HELPERS ====================
 def find_xray():
     p = os.environ.get("XRAY_BIN")
     if p and os.path.isfile(p) and os.access(p, os.X_OK):
@@ -160,7 +156,6 @@ def now_gmt630():
 
 
 def format_title():
-    """e.g. '2-Oct-2026 4:15 PM Updated'"""
     t = now_gmt630()
     day = t.day
     date_str = f"{day}-{t.strftime('%b-%Y')}"
@@ -168,7 +163,6 @@ def format_title():
     return f"{date_str} {time_str} Updated"
 
 
-# ==================== PARSERS ====================
 def parse_vless(link):
     try:
         if not link.startswith("vless://"):
@@ -343,7 +337,6 @@ def dedupe_links(links):
     return out, dropped
 
 
-# ==================== XRAY CONFIG ====================
 def create_xray_config(p, path, listen_port):
     if p.get("proto") == "shadowsocks":
         outbound = {
@@ -383,7 +376,7 @@ def create_xray_config(p, path, listen_port):
                            "security": p.get("scy") or "auto", "level": 0}]}]},
             "streamSettings": stream,
         }
-    else:  # vless
+    else:
         q = p["query"]
         host, port, uuid = p["host"], int(p["port"]), p["uuid"]
         network = q.get("type", "tcp")
@@ -439,7 +432,6 @@ def create_xray_config(p, path, listen_port):
         json.dump(config, f)
 
 
-# ==================== NETWORK ====================
 def tcp_open(host, port, timeout=TCP_PRECHECK):
     host = str(host).strip("[]")
     try:
@@ -556,7 +548,6 @@ def fmt_bar(done, total, width=28):
     return "[" + "█" * filled + "░" * (width - filled) + "]"
 
 
-# ==================== MAIN ====================
 def main():
     print(f"[main] finding xray...", flush=True)
     xray_bin = find_xray()
@@ -576,7 +567,6 @@ def main():
     print(f"{C.CYAN}🎯 Countries:{C.RESET} {', '.join(ALLOWED_COUNTRIES)}", flush=True)
     print(f"{C.CYAN}🕒 Title:{C.RESET} {title}", flush=True)
 
-    # ---------- Fetch ----------
     print(f"\n{C.BOLD}Fetching from {len(SOURCE_URLS)} sources...{C.RESET}", flush=True)
     raw_lines = []
 
@@ -622,5 +612,198 @@ def main():
     lines, dropped = dedupe_links(raw_lines)
     print(f"{C.GREEN}Unique: {len(lines)}{C.RESET} {C.DIM}(dropped {dropped}){C.RESET}", flush=True)
 
-    # ---------- Parse ----------
-    print(f"\n{C.BOLD}=== Parse + DNS + GeoIP ==={C
+    print(f"\n{C.BOLD}=== Parse + DNS + GeoIP ==={C.RESET}", flush=True)
+
+    link_parsed, hosts = [], set()
+    for ln in lines:
+        p = parse_link(ln)
+        if p and p.get("host"):
+            link_parsed.append((ln, p))
+            hosts.add(p["host"])
+
+    print(f"  Parsed: {C.GREEN}{len(link_parsed)}{C.RESET}  "
+          f"Unique hosts: {C.CYAN}{len(hosts)}{C.RESET}", flush=True)
+
+    if not hosts:
+        print(f"{C.RED}❌ No hosts.{C.RESET}", flush=True)
+        sys.exit(1)
+
+    host_ip = {}
+
+    def resolve(h):
+        try:
+            return h, socket.gethostbyname(h.strip("[]"))
+        except Exception:
+            return h, None
+
+    print(f"  {C.YELLOW}⏳ DNS ({len(hosts)} hosts)...{C.RESET}", flush=True)
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=DNS_WORKERS) as pool:
+        for h, ip in pool.map(resolve, hosts):
+            if ip:
+                host_ip[h] = ip
+    print(f"  {C.GREEN}✓ DNS done{C.RESET} {time.time()-t0:.1f}s ({len(host_ip)})", flush=True)
+
+    uniq_ips = list(set(host_ip.values()))
+    ip_cc = {}
+    print(f"  {C.YELLOW}⏳ GeoIP ({len(uniq_ips)} IPs)...{C.RESET}", flush=True)
+    t0 = time.time()
+    for i in range(0, len(uniq_ips), 100):
+        chunk = uniq_ips[i:i+100]
+        try:
+            r = SESSION.post(
+                "http://ip-api.com/batch?fields=status,countryCode,query",
+                json=[{"query": ip} for ip in chunk], timeout=8,
+            ).json()
+            for item in r:
+                if item.get("status") == "success":
+                    ip_cc[item["query"]] = item.get("countryCode", "").upper()
+        except Exception as e:
+            print(f"    {C.RED}GeoIP: {e}{C.RESET}", flush=True)
+    print(f"  {C.GREEN}✓ GeoIP done{C.RESET} {time.time()-t0:.1f}s", flush=True)
+
+    per_country_count = {cc: 0 for cc in ALLOWED_COUNTRIES}
+    filtered = []
+    for ln, p in link_parsed:
+        ip = host_ip.get(p["host"])
+        if not ip:
+            continue
+        cc = ip_cc.get(ip, "")
+        if cc in ALLOWED_COUNTRIES:
+            filtered.append((ln, p, cc))
+            per_country_count[cc] += 1
+
+    print(f"\n{C.BOLD}{C.GREEN}🎯 Target: {len(filtered)} / {len(lines)}{C.RESET}", flush=True)
+    for cc in ALLOWED_COUNTRIES:
+        flag = get_flag_emoji(cc)
+        print(f"    {flag} {cc}: {per_country_count[cc]} nodes", flush=True)
+    print("", flush=True)
+
+    if not filtered:
+        print(f"{C.RED}No matching nodes.{C.RESET}", flush=True)
+        sys.exit(1)
+
+    print(f"{C.BOLD}=== TCP pre-check ==={C.RESET}", flush=True)
+    t0 = time.time()
+
+    def precheck(item):
+        _, p, _ = item
+        return item, tcp_open(p["host"], p["port"])
+
+    alive = []
+    with ThreadPoolExecutor(max_workers=100) as pool:
+        for item, ok in pool.map(precheck, filtered):
+            if ok:
+                alive.append(item)
+
+    print(f"  {C.GREEN}Alive: {len(alive)}{C.RESET} / {len(filtered)}  "
+          f"{C.DIM}({time.time()-t0:.1f}s){C.RESET}\n", flush=True)
+
+    if not alive:
+        print(f"{C.RED}No reachable hosts.{C.RESET}", flush=True)
+        sys.exit(1)
+
+    print(f"{C.BOLD}=== Real Internet Test ==={C.RESET}\n", flush=True)
+    port_q = queue.Queue()
+    for i in range(WORKERS):
+        port_q.put(BASE_PORT + i)
+
+    total = len(alive)
+    state = {"done": 0, "online": 0}
+    results = []
+    fails = {}
+    t_start = time.time()
+    lock = threading.Lock()
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        futs = {pool.submit(test_one, item, xray_bin, port_q): item for item in alive}
+        for fut in as_completed(futs):
+            delay, reason, parsed, link, cc = fut.result()
+            with lock:
+                state["done"] += 1
+                done = state["done"]
+                if delay is not None:
+                    state["online"] += 1
+                    flag = get_flag_emoji(cc)
+                    results.append((delay, link, cc, flag, parsed))
+                    bar = fmt_bar(done, total)
+                    print(f"{bar} {done:>4}/{total}  "
+                          f"{C.GREEN}✓ {delay:>4}ms{C.RESET}  "
+                          f"{flag} {cc:<2}  "
+                          f"{C.DIM}{parsed['host']}:{parsed['port']}{C.RESET}",
+                          flush=True)
+                else:
+                    fails[reason] = fails.get(reason, 0) + 1
+                    if done % 25 == 0 or DEBUG:
+                        bar = fmt_bar(done, total)
+                        print(f"{bar} {done:>4}/{total}  "
+                              f"{C.RED}✗ {reason}{C.RESET}  "
+                              f"{C.DIM}{parsed['host']}:{parsed['port']}{C.RESET}",
+                              flush=True)
+
+    elapsed = time.time() - t_start
+    print(f"\n{C.BOLD}=== Summary ==={C.RESET}", flush=True)
+    print(f"  {C.GREEN}ONLINE : {state['online']}{C.RESET} / {total}", flush=True)
+    print(f"  {C.RED}FAILED : {total - state['online']}{C.RESET}", flush=True)
+    print(f"  {C.CYAN}Time   : {elapsed:.1f}s{C.RESET}", flush=True)
+
+    if fails:
+        print(f"  Reasons:", flush=True)
+        for r, c in sorted(fails.items(), key=lambda x: -x[1]):
+            print(f"    {C.RED}{r:>15}{C.RESET} : {c}", flush=True)
+
+    if not results:
+        print(f"\n{C.RED}❌ No ONLINE nodes.{C.RESET}", flush=True)
+        sys.exit(1)
+
+    buckets = {cc: [] for cc in ALLOWED_COUNTRIES}
+    for delay, link, cc, flag, parsed in results:
+        if cc in buckets:
+            buckets[cc].append((delay, link, cc, flag, parsed))
+
+    print(f"\n{C.BOLD}=== Per-Country Top {TOP_PER_COUNTRY} ==={C.RESET}", flush=True)
+    picked = []
+    for cc in ALLOWED_COUNTRIES:
+        bucket = sorted(buckets.get(cc, []), key=lambda x: x[0])
+        top = bucket[:TOP_PER_COUNTRY]
+        flag = get_flag_emoji(cc)
+        if top:
+            print(f"  {flag} {cc:<2} : {len(top):>2} nodes  "
+                  f"{C.DIM}(best {top[0][0]}ms){C.RESET}", flush=True)
+        else:
+            print(f"  {flag} {cc:<2} : {C.RED}0 nodes{C.RESET}", flush=True)
+        picked.extend(top)
+
+    if not picked:
+        print(f"\n{C.RED}❌ No nodes selected.{C.RESET}", flush=True)
+        sys.exit(1)
+
+    out = [f"#profile-title: {title}"]
+    counter = {}
+    for delay, link, cc, flag, _ in picked:
+        counter[cc] = counter.get(cc, 0) + 1
+        name = f"{flag} {COUNTRY_NAMES.get(cc, cc)} {counter[cc]}"
+        base = link.split("#")[0]
+        out.append(f"{base}#{urllib.parse.quote(name)}")
+
+    with open("servers", "w") as f:
+        f.write(base64.b64encode("\n".join(out).encode()).decode())
+
+    print(f"\n{C.GREEN}✅ servers : {len(picked)} nodes written{C.RESET}", flush=True)
+    print(f"{C.DIM}   Title: {title}{C.RESET}", flush=True)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(f"\n{C.YELLOW}Interrupted.{C.RESET}", flush=True)
+        sys.exit(130)
+    except SystemExit:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"\n{C.RED}❌ FATAL ERROR:{C.RESET}", flush=True)
+        print(f"{C.RED}{type(e).__name__}: {e}{C.RESET}", flush=True)
+        traceback.print_exc()
+        sys.exit(1)
