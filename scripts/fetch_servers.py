@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-V2Ray Auto Tester
-- Only 5 countries: SG, US, JP, TH, HK
-- Top 10 per country = 50 nodes
+V2Ray Auto Tester — Best Ping + SG Guarantee
+- Test all countries (no filter)
+- Final output: 60 nodes
+  * Top 10 SG nodes (minimum, if available)
+  * Fill remaining with best ping overall
 - Node name: <flag> <Country> <n>
 - Profile title: <D-Mon-YYYY H:MM AM/PM> Updated  (GMT+6:30)
 - Output: single file `servers` (base64)
@@ -27,6 +29,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 
+# ==================== UNBUFFERED ====================
 try:
     sys.stdout.reconfigure(line_buffering=True)
     sys.stderr.reconfigure(line_buffering=True)
@@ -42,8 +45,9 @@ print("=" * 60, flush=True)
 
 
 # ==================== SETTINGS ====================
-TOP_PER_COUNTRY = 10
-ALLOWED_COUNTRIES = ["SG", "US", "JP", "TH", "HK"]
+TOTAL_NODES = 60                 # ✅ final output nodes
+SG_MIN = 10                      # ✅ minimum SG nodes
+SG_CC = "SG"
 
 TEST_URL = "https://www.gstatic.com/generate_204"
 BASE_PORT = 10808
@@ -58,12 +62,10 @@ TZ_OFFSET = datetime.timedelta(hours=6, minutes=30)
 
 SOURCE_URLS = [
     "https://raw.githubusercontent.com/hamedcode/port-based-v2ray-configs/main/sub/vless.txt",
-    "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt",
-    "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/server.txt",
-    "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt",
-    "https://raw.githubusercontent.com/mahdibland/ShadowsocksAggregator/master/Eternity.txt",
-    "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt",
-    "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/sg/vless.txt",
+    "https://raw.githubusercontent.com/hamedcode/port-based-v2ray-configs/main/sub/vmess.txt",
+    "https://raw.githubusercontent.com/hamedcode/port-based-v2ray-configs/main/sub/ss.txt",
+    "https://raw.githubusercontent.com/ninjastrikers/Nexus-nodes/main/configs/countries/sg/all.txt",
+    "https://raw.githubusercontent.com/roosterkid/openproxylist/refs/heads/main/V2RAY_BASE64.txt",
 ]
 
 SUPPORTED_SS_METHODS = {
@@ -76,11 +78,25 @@ SS_METHOD_ALIAS = {
 }
 
 COUNTRY_NAMES = {
-    "SG": "Singapore",
-    "US": "United States",
-    "JP": "Japan",
-    "TH": "Thailand",
-    "HK": "Hong Kong",
+    "SG": "Singapore", "US": "United States", "JP": "Japan",
+    "TH": "Thailand", "HK": "Hong Kong", "VN": "Vietnam",
+    "KR": "Korea", "TW": "Taiwan", "IN": "India", "DE": "Germany",
+    "FR": "France", "NL": "Netherlands", "GB": "United Kingdom",
+    "CA": "Canada", "AU": "Australia", "MY": "Malaysia",
+    "ID": "Indonesia", "PH": "Philippines", "CN": "China",
+    "RU": "Russia", "BR": "Brazil", "TR": "Turkey", "IR": "Iran",
+    "SE": "Sweden", "CH": "Switzerland", "IT": "Italy", "ES": "Spain",
+    "PL": "Poland", "UA": "Ukraine", "AE": "UAE", "IL": "Israel",
+    "FI": "Finland", "NO": "Norway", "DK": "Denmark", "BE": "Belgium",
+    "AT": "Austria", "CZ": "Czechia", "RO": "Romania", "HU": "Hungary",
+    "LT": "Lithuania", "LV": "Latvia", "EE": "Estonia", "MD": "Moldova",
+    "BG": "Bulgaria", "GR": "Greece", "PT": "Portugal", "IE": "Ireland",
+    "NZ": "New Zealand", "ZA": "South Africa", "EG": "Egypt",
+    "SA": "Saudi Arabia", "PK": "Pakistan", "BD": "Bangladesh",
+    "LK": "Sri Lanka", "NP": "Nepal", "KH": "Cambodia", "LA": "Laos",
+    "MM": "Myanmar", "MN": "Mongolia", "KZ": "Kazakhstan",
+    "AR": "Argentina", "CL": "Chile", "MX": "Mexico", "CO": "Colombia",
+    "PE": "Peru", "VE": "Venezuela", "EC": "Ecuador",
 }
 
 
@@ -89,6 +105,7 @@ class C:
     RED = "\033[31m"; GREEN = "\033[32m"; YELLOW = "\033[33m"; CYAN = "\033[36m"
 
 
+# ==================== HTTP SESSION ====================
 def make_session():
     s = requests.Session()
     retries = Retry(total=2, backoff_factor=0.2,
@@ -101,6 +118,7 @@ def make_session():
 SESSION = make_session()
 
 
+# ==================== HELPERS ====================
 def find_xray():
     p = os.environ.get("XRAY_BIN")
     if p and os.path.isfile(p) and os.access(p, os.X_OK):
@@ -164,6 +182,7 @@ def format_title():
     return f"{date_str} {time_str} Updated"
 
 
+# ==================== PARSERS ====================
 def parse_vless(link):
     try:
         if not link.startswith("vless://"):
@@ -338,6 +357,7 @@ def dedupe_links(links):
     return out, dropped
 
 
+# ==================== XRAY CONFIG ====================
 def create_xray_config(p, path, listen_port):
     if p.get("proto") == "shadowsocks":
         outbound = {
@@ -377,7 +397,7 @@ def create_xray_config(p, path, listen_port):
                            "security": p.get("scy") or "auto", "level": 0}]}]},
             "streamSettings": stream,
         }
-    else:
+    else:  # vless
         q = p["query"]
         host, port, uuid = p["host"], int(p["port"]), p["uuid"]
         network = q.get("type", "tcp")
@@ -433,6 +453,7 @@ def create_xray_config(p, path, listen_port):
         json.dump(config, f)
 
 
+# ==================== NETWORK ====================
 def tcp_open(host, port, timeout=TCP_PRECHECK):
     host = str(host).strip("[]")
     try:
@@ -549,6 +570,7 @@ def fmt_bar(done, total, width=28):
     return "[" + "█" * filled + "░" * (width - filled) + "]"
 
 
+# ==================== MAIN ====================
 def main():
     print(f"[main] finding xray...", flush=True)
     xray_bin = find_xray()
@@ -564,10 +586,11 @@ def main():
     title = format_title()
     print(f"{C.CYAN}xray:{C.RESET} {xray_bin}", flush=True)
     print(f"{C.CYAN}workers:{C.RESET} {WORKERS}  "
-          f"{C.CYAN}TOP/country:{C.RESET} {TOP_PER_COUNTRY}", flush=True)
-    print(f"{C.CYAN}🎯 Countries:{C.RESET} {', '.join(ALLOWED_COUNTRIES)}", flush=True)
+          f"{C.CYAN}TOTAL:{C.RESET} {TOTAL_NODES}  "
+          f"{C.CYAN}SG_MIN:{C.RESET} {SG_MIN}", flush=True)
     print(f"{C.CYAN}🕒 Title:{C.RESET} {title}", flush=True)
 
+    # ---------- Fetch ----------
     print(f"\n{C.BOLD}Fetching from {len(SOURCE_URLS)} sources...{C.RESET}", flush=True)
     raw_lines = []
 
@@ -600,7 +623,7 @@ def main():
                 ln = ln.strip()
                 if not ln:
                     continue
-                if ln.lower().startswith(("vless://", "vmess://", "ss://")):
+                if ln.lower().startswith(("vless://", "vmess://", "ss://", "trojan://")):
                     raw_lines.append(ln)
                     n += 1
             print(f"  {C.GREEN}✓{C.RESET} {url[:70]} → {n} nodes", flush=True)
@@ -613,6 +636,7 @@ def main():
     lines, dropped = dedupe_links(raw_lines)
     print(f"{C.GREEN}Unique: {len(lines)}{C.RESET} {C.DIM}(dropped {dropped}){C.RESET}", flush=True)
 
+    # ---------- Parse ----------
     print(f"\n{C.BOLD}=== Parse + DNS + GeoIP ==={C.RESET}", flush=True)
 
     link_parsed, hosts = [], set()
@@ -663,27 +687,22 @@ def main():
             print(f"    {C.RED}GeoIP: {e}{C.RESET}", flush=True)
     print(f"  {C.GREEN}✓ GeoIP done{C.RESET} {time.time()-t0:.1f}s", flush=True)
 
-    per_country_count = {cc: 0 for cc in ALLOWED_COUNTRIES}
-    filtered = []
+    # ---------- Build test list (all countries) ----------
+    all_nodes = []
     for ln, p in link_parsed:
         ip = host_ip.get(p["host"])
-        if not ip:
-            continue
-        cc = ip_cc.get(ip, "")
-        if cc in ALLOWED_COUNTRIES:
-            filtered.append((ln, p, cc))
-            per_country_count[cc] += 1
+        cc = ip_cc.get(ip, "") if ip else ""
+        all_nodes.append((ln, p, cc))
 
-    print(f"\n{C.BOLD}{C.GREEN}🎯 Target: {len(filtered)} / {len(lines)}{C.RESET}", flush=True)
-    for cc in ALLOWED_COUNTRIES:
-        flag = get_flag_emoji(cc)
-        print(f"    {flag} {cc}: {per_country_count[cc]} nodes", flush=True)
-    print("", flush=True)
+    sg_count = sum(1 for _, _, cc in all_nodes if cc == SG_CC)
+    print(f"\n{C.BOLD}{C.GREEN}🎯 Test list: {len(all_nodes)} "
+          f"(🇸🇬 SG: {sg_count}){C.RESET}\n", flush=True)
 
-    if not filtered:
-        print(f"{C.RED}No matching nodes.{C.RESET}", flush=True)
+    if not all_nodes:
+        print(f"{C.RED}No nodes.{C.RESET}", flush=True)
         sys.exit(1)
 
+    # ---------- TCP pre-check ----------
     print(f"{C.BOLD}=== TCP pre-check ==={C.RESET}", flush=True)
     t0 = time.time()
 
@@ -693,17 +712,18 @@ def main():
 
     alive = []
     with ThreadPoolExecutor(max_workers=100) as pool:
-        for item, ok in pool.map(precheck, filtered):
+        for item, ok in pool.map(precheck, all_nodes):
             if ok:
                 alive.append(item)
 
-    print(f"  {C.GREEN}Alive: {len(alive)}{C.RESET} / {len(filtered)}  "
+    print(f"  {C.GREEN}Alive: {len(alive)}{C.RESET} / {len(all_nodes)}  "
           f"{C.DIM}({time.time()-t0:.1f}s){C.RESET}\n", flush=True)
 
     if not alive:
         print(f"{C.RED}No reachable hosts.{C.RESET}", flush=True)
         sys.exit(1)
 
+    # ---------- Real test ----------
     print(f"{C.BOLD}=== Real Internet Test ==={C.RESET}\n", flush=True)
     port_q = queue.Queue()
     for i in range(WORKERS):
@@ -757,33 +777,60 @@ def main():
         print(f"\n{C.RED}❌ No ONLINE nodes.{C.RESET}", flush=True)
         sys.exit(1)
 
-    buckets = {cc: [] for cc in ALLOWED_COUNTRIES}
-    for delay, link, cc, flag, parsed in results:
-        if cc in buckets:
-            buckets[cc].append((delay, link, cc, flag, parsed))
+    # ---------- Sort by ping (ascending) ----------
+    results.sort(key=lambda x: x[0])
 
-    print(f"\n{C.BOLD}=== Per-Country Top {TOP_PER_COUNTRY} ==={C.RESET}", flush=True)
-    picked = []
-    for cc in ALLOWED_COUNTRIES:
-        bucket = sorted(buckets.get(cc, []), key=lambda x: x[0])
-        top = bucket[:TOP_PER_COUNTRY]
+    # ---------- Select: SG >= 10, then fill with best ping ----------
+    sg_results = [r for r in results if r[2] == SG_CC]
+    other_results = [r for r in results if r[2] != SG_CC]
+
+    # Pick SG (up to SG_MIN)
+    picked_sg = sg_results[:SG_MIN]
+    picked = list(picked_sg)
+    picked_keys = {node_key(r[1]) for r in picked_sg}
+
+    # Fill remaining with best ping overall (any country)
+    for r in results:
+        if len(picked) >= TOTAL_NODES:
+            break
+        k = node_key(r[1])
+        if k in picked_keys:
+            continue
+        picked.append(r)
+        picked_keys.add(k)
+
+    # ---------- Report ----------
+    print(f"\n{C.BOLD}=== Final Selection ==={C.RESET}", flush=True)
+    print(f"  Target    : {TOTAL_NODES} nodes", flush=True)
+    print(f"  Picked    : {len(picked)} nodes", flush=True)
+    print(f"  SG picked : {len(picked_sg)} (target min {SG_MIN})", flush=True)
+
+    # Per-country breakdown
+    cc_count = {}
+    for delay, link, cc, flag, _ in picked:
+        cc_count[cc] = cc_count.get(cc, 0) + 1
+
+    print(f"  By country:", flush=True)
+    for cc, cnt in sorted(cc_count.items(), key=lambda x: -x[1]):
         flag = get_flag_emoji(cc)
-        if top:
-            print(f"  {flag} {cc:<2} : {len(top):>2} nodes  "
-                  f"{C.DIM}(best {top[0][0]}ms){C.RESET}", flush=True)
-        else:
-            print(f"  {flag} {cc:<2} : {C.RED}0 nodes{C.RESET}", flush=True)
-        picked.extend(top)
+        print(f"    {flag} {cc or '??'} : {cnt}", flush=True)
+
+    # Best ping preview
+    print(f"\n  Top 5:", flush=True)
+    for delay, link, cc, flag, parsed in picked[:5]:
+        print(f"    {delay:>4}ms  {flag} {cc:<2}  {parsed['host']}:{parsed['port']}", flush=True)
 
     if not picked:
         print(f"\n{C.RED}❌ No nodes selected.{C.RESET}", flush=True)
         sys.exit(1)
 
+    # ---------- Write servers file ----------
     out = [f"#profile-title: {title}"]
     counter = {}
     for delay, link, cc, flag, _ in picked:
         counter[cc] = counter.get(cc, 0) + 1
-        name = f"{flag} {COUNTRY_NAMES.get(cc, cc)} {counter[cc]}"
+        cname = COUNTRY_NAMES.get(cc, cc or "Unknown")
+        name = f"{flag} {cname} {counter[cc]}"
         base = link.split("#")[0]
         out.append(f"{base}#{urllib.parse.quote(name)}")
 
