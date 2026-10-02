@@ -27,6 +27,22 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 
+# ==================== FORCE UNBUFFERED (GitHub Actions) ====================
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
+# Print startup banner immediately (proves script is running)
+print("=" * 60, flush=True)
+print("V2Ray Auto Tester — starting", flush=True)
+print(f"Python: {sys.version}", flush=True)
+print(f"CWD:    {os.getcwd()}", flush=True)
+print(f"XRAY_BIN env: {os.environ.get('XRAY_BIN', '(not set)')}", flush=True)
+print("=" * 60, flush=True)
+
+
 # ==================== SETTINGS ====================
 TOP_PER_COUNTRY = 10
 ALLOWED_COUNTRIES = ["SG", "US", "JP", "TH", "HK"]
@@ -140,7 +156,7 @@ def _host_port(host_port, default=443):
 
 
 def now_gmt630():
-    return datetime.datetime.utcnow() + TZ_OFFSET
+    return datetime.datetime.now(datetime.timezone.utc) + TZ_OFFSET
 
 
 def format_title():
@@ -327,7 +343,7 @@ def dedupe_links(links):
     return out, dropped
 
 
-# ==================== XRAY CONFIG BUILDER ====================
+# ==================== XRAY CONFIG ====================
 def create_xray_config(p, path, listen_port):
     if p.get("proto") == "shadowsocks":
         outbound = {
@@ -542,20 +558,26 @@ def fmt_bar(done, total, width=28):
 
 # ==================== MAIN ====================
 def main():
+    print(f"[main] finding xray...", flush=True)
     xray_bin = find_xray()
+    print(f"[main] xray = {xray_bin}", flush=True)
+
     if not xray_bin:
-        print(f"{C.RED}❌ xray not found.{C.RESET}")
+        print(f"{C.RED}❌ xray not found.{C.RESET}", flush=True)
+        print(f"  XRAY_BIN env:  {os.environ.get('XRAY_BIN', '(not set)')}", flush=True)
+        print(f"  PATH check:    {shutil.which('xray')}", flush=True)
+        print(f"  File exists:   {os.path.exists('/home/runner/xray-bin/xray')}", flush=True)
         sys.exit(1)
 
     title = format_title()
-    print(f"{C.CYAN}xray:{C.RESET} {xray_bin}")
+    print(f"{C.CYAN}xray:{C.RESET} {xray_bin}", flush=True)
     print(f"{C.CYAN}workers:{C.RESET} {WORKERS}  "
-          f"{C.CYAN}TOP/country:{C.RESET} {TOP_PER_COUNTRY}")
-    print(f"{C.CYAN}🎯 Countries:{C.RESET} {', '.join(ALLOWED_COUNTRIES)}")
-    print(f"{C.CYAN}🕒 Title:{C.RESET} {title}")
+          f"{C.CYAN}TOP/country:{C.RESET} {TOP_PER_COUNTRY}", flush=True)
+    print(f"{C.CYAN}🎯 Countries:{C.RESET} {', '.join(ALLOWED_COUNTRIES)}", flush=True)
+    print(f"{C.CYAN}🕒 Title:{C.RESET} {title}", flush=True)
 
     # ---------- Fetch ----------
-    print(f"\n{C.BOLD}Fetching from {len(SOURCE_URLS)} sources...{C.RESET}")
+    print(f"\n{C.BOLD}Fetching from {len(SOURCE_URLS)} sources...{C.RESET}", flush=True)
     raw_lines = []
 
     def fetch(url):
@@ -569,6 +591,36 @@ def main():
     with ThreadPoolExecutor(max_workers=len(SOURCE_URLS)) as pool:
         for url, text, err in pool.map(fetch, SOURCE_URLS):
             if err:
-                print(f"  {C.RED}✗ {url[:70]} → {err}{C.RESET}")
+                print(f"  {C.RED}✗ {url[:70]} → {err}{C.RESET}", flush=True)
                 continue
             decoded = text
+            s = text.strip()
+            if "://" not in s[:200] and " " not in s[:200]:
+                try:
+                    padded = s + "=" * ((4 - len(s) % 4) % 4)
+                    if re.match(r"^[A-Za-z0-9+/=_\-\s]+$", padded):
+                        cand = base64.b64decode(padded).decode("utf-8", "ignore")
+                        if "://" in cand:
+                            decoded = cand
+                except Exception:
+                    pass
+            n = 0
+            for ln in decoded.splitlines():
+                ln = ln.strip()
+                if not ln:
+                    continue
+                if ln.lower().startswith(("vless://", "vmess://", "ss://")):
+                    raw_lines.append(ln)
+                    n += 1
+            print(f"  {C.GREEN}✓{C.RESET} {url[:70]} → {n} nodes", flush=True)
+
+    print(f"\n{C.GREEN}Total raw: {len(raw_lines)}{C.RESET}", flush=True)
+    if not raw_lines:
+        print(f"{C.RED}❌ No configs.{C.RESET}", flush=True)
+        sys.exit(1)
+
+    lines, dropped = dedupe_links(raw_lines)
+    print(f"{C.GREEN}Unique: {len(lines)}{C.RESET} {C.DIM}(dropped {dropped}){C.RESET}", flush=True)
+
+    # ---------- Parse ----------
+    print(f"\n{C.BOLD}=== Parse + DNS + GeoIP ==={C
