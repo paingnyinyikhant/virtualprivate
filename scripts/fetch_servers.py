@@ -42,7 +42,7 @@ print("=" * 60, flush=True)
 
 
 # ==================== SETTINGS ====================
-TOP_PER_COUNTRY = 10
+TOP_PER_COUNTRY = 20
 ALLOWED_COUNTRIES = ["SG", "US", "JP", "TH", "HK"]
 
 TEST_URL = "https://www.gstatic.com/generate_204"
