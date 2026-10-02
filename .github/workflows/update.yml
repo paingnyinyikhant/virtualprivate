@@ -118,7 +118,6 @@ jobs:
           echo "Download complete:"
           ls -la /tmp/xray.zip
 
-          # Verify it's a valid zip
           if ! unzip -t /tmp/xray.zip >/dev/null 2>&1; then
             echo "❌ Invalid zip file"
             file /tmp/xray.zip
@@ -133,7 +132,6 @@ jobs:
 
           chmod +x $HOME/xray-bin/xray
 
-          # Verify binary works
           if ! $HOME/xray-bin/xray version 2>&1 | head -3; then
             echo "❌ Xray binary can't run"
             file $HOME/xray-bin/xray
@@ -208,11 +206,72 @@ jobs:
 
           git push
 
-      # ==================== TRIGGER SYNC ====================
+      # ==================== TRIGGER SYNC (BOTH URLS) ====================
       - name: Trigger external sync
         if: steps.guard.outputs.skip != 'true' && success()
         continue-on-error: true
         run: |
-          curl -sf -A "Mozilla/5.0" --max-time 15 \
-            "https://mm.virtualalpha.casacam.net/api/cron/sync?key=1aa09056548d8bec0e891327c1208531d4d9b403ba19c9bf" \
-            && echo "✓ Sync triggered" || echo "⚠ Sync failed"
+          echo "════════════════════════════════════════"
+          echo "Triggering sync endpoints"
+          echo "════════════════════════════════════════"
+          echo ""
+
+          URL_CRON="https://mm.virtualalpha.casacam.net/api/cron/sync?key=1aa09056548d8bec0e891327c1208531d4d9b403ba19c9bf"
+          URL_FORCE="https://mm.virtualalpha.casacam.net/sync/1aa09056548d8bec0e891327c1208531d4d9b403ba19c9bf?force=1"
+
+          # --- 1/2 Cron sync ---
+          echo "--- [1/2] Cron sync API ---"
+          echo "URL: $URL_CRON"
+          echo ""
+
+          RESP1=$(curl -s -o /tmp/out1 -w "%{http_code}" \
+            -A "Mozilla/5.0" --max-time 20 "$URL_CRON" || echo "000")
+
+          echo "HTTP: $RESP1"
+          echo "Response body:"
+          head -c 500 /tmp/out1 2>/dev/null || echo "(no body)"
+          echo ""
+
+          if [ "$RESP1" = "200" ] || [ "$RESP1" = "204" ]; then
+            echo "✓ Cron sync OK"
+          else
+            echo "⚠ Cron sync failed (HTTP $RESP1)"
+          fi
+          echo ""
+
+          # --- 2/2 Force sync ---
+          echo "--- [2/2] Force sync ---"
+          echo "URL: $URL_FORCE"
+          echo ""
+
+          RESP2=$(curl -s -o /tmp/out2 -w "%{http_code}" \
+            -A "Mozilla/5.0" --max-time 20 "$URL_FORCE" || echo "000")
+
+          echo "HTTP: $RESP2"
+          echo "Response body:"
+          head -c 500 /tmp/out2 2>/dev/null || echo "(no body)"
+          echo ""
+
+          if [ "$RESP2" = "200" ] || [ "$RESP2" = "204" ]; then
+            echo "✓ Force sync OK"
+          else
+            echo "⚠ Force sync failed (HTTP $RESP2)"
+          fi
+          echo ""
+
+          # --- Summary ---
+          echo "════════════════════════════════════════"
+          echo "Summary:"
+          echo "  Cron sync  → HTTP $RESP1"
+          echo "  Force sync → HTTP $RESP2"
+          echo "════════════════════════════════════════"
+
+      # ==================== FINAL NOTICE ====================
+      - name: Final notice
+        if: steps.guard.outputs.skip == 'true'
+        run: |
+          echo ""
+          echo "════════════════════════════════════════"
+          echo "This run was skipped (backup guard)"
+          echo "Cloudflare Worker already updated servers"
+          echo "════════════════════════════════════════"
